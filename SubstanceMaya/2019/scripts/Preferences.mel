@@ -1,0 +1,474 @@
+
+global int $numWorkflows = 3;
+//global string $workflowName[] = {"Classic", "StingrayPBS", "Custom"};
+global int $_CLASSIC = 0;
+global int $_STINGRAY_PBS = 1;
+global int $_CUSTOM = 2;
+
+global proc onWorkflowButton(int $workflow) {
+    global int $pref_workflow;
+
+    $pref_workflow = $workflow;
+}
+global proc onAutomaticConnections(int $state) {
+    global int $pref_automaticConnections;
+        
+    $pref_automaticConnections = $state;
+}
+global proc onPreferencesOutputCacheButton(int $outputCacheTask) {
+
+    global int $pref_outputCacheTask;
+
+    $pref_outputCacheTask = $outputCacheTask;
+
+	updatePreferencesCacheFolderDialog();
+}
+
+
+global proc onPreferencesCacheFolder() {
+    global int $pref_outputCacheTask;
+    global string $pref_outputCacheFolder;
+
+    //global string $cacheFolderTextfieldControl;
+
+    print("onPreferencesCacheFolder()...");
+
+	string $result[] = `fileDialog2 -caption "Select custom folder" -fm 2 -dialogStyle 2 -startingDirectory $pref_outputCacheFolder`;
+	if (!size($result)) {
+		return; //user has cancelled
+	}
+
+    $pref_outputCacheFolder = $result[0];
+
+    //print("$result[0] = " + $result[0] + "\n");
+    //print("$pref_outputCacheFolder = " + $pref_outputCacheFolder + "\n");
+
+	textField -edit -text $pref_outputCacheFolder -ed false cacheFolderTextfieldControl;
+
+    updatePreferencesCacheFolderDialog();
+}
+
+global proc updatePreferencesCacheFolderDialog() {
+    global int $pref_outputCacheTask;
+    global string $pref_outputCacheFolder;
+
+    //print("updatePreferencesCacheFolderDialog(), $pref_outputCacheFolder = " + $pref_outputCacheFolder + "\n");        
+
+    // Make pretty display for cache output path!
+    if ($pref_outputCacheTask == 0) {
+        // Hide controls
+        text -edit -visible false cacheFolderTextControl;
+        textField -edit -visible false cacheFolderTextfieldControl;
+        symbolButton -edit -visible false cacheFolderSymbolButtonControl;
+    }
+    else if ($pref_outputCacheTask == 1) {
+        // Put path in textField, but make it look like a label
+
+        $projectDir = `workspace -q -fullName` + "/sourceimages/";
+
+        text -edit -visible true cacheFolderTextControl;
+        textField -edit -visible true
+                        -ed false
+                        -backgroundColor 0.2 0.2 0.2
+                        -text $projectDir
+                         cacheFolderTextfieldControl;
+        symbolButton -edit -visible false cacheFolderSymbolButtonControl;
+    }
+    else if ($pref_outputCacheTask == 2) {
+        // ...it's a textField will full support...
+
+        if ($pref_outputCacheFolder == "")
+            $pref_outputCacheFolder = `workspace -q -fullName`;
+
+        text -edit -visible true cacheFolderTextControl;
+        textField -edit -visible true
+                        -ed false
+                        -backgroundColor 0.15 0.15 0.15
+                        -text $pref_outputCacheFolder
+                         cacheFolderTextfieldControl;
+        symbolButton -edit -visible true cacheFolderSymbolButtonControl;
+    }
+}
+
+global proc onGlobalTextureWidth(string $itemString)
+{
+    print("$itemString = " + $itemString + "\n");
+
+    global int $pref_globalTextureWidth;
+    $pref_globalTextureWidth = (int)$itemString;
+    print("$pref_globalTextureWidth = " + $pref_globalTextureWidth + "\n");
+}
+global proc onGlobalTextureHeight(string $itemString)
+{
+    print("$itemString = " + $itemString + "\n");
+
+    global int $pref_globalTextureHeight;
+    $pref_globalTextureHeight = (int)$itemString;
+    print("$pref_globalTextureHeight = " + $pref_globalTextureHeight + "\n");
+}
+//global proc onBakeFormat(string $itemString)
+global proc onBakeFormat()
+{
+    global int $pref_bakeFormat;
+
+    $pref_bakeFormat = `optionMenu -query -select bakeFormatControl`; // MEL's BS...
+
+    print("$pref_bakeFormat = " + $pref_bakeFormat + "\n");
+}
+
+global proc onPreferencesButton() {
+
+    //print("onPreferencesButton(...)...\n");
+
+    if (`window -exists substancePreferencesWindow`) {
+        //print("    It already exists: make it visible...\n");
+        showWindow substancePreferencesWindow;
+        return;
+    }
+    //print("    Create the window...\n");
+    
+    // ...........................................................
+    global int $_CLASSIC;
+    global int $_STINGRAY_PBS;
+    global int $_CUSTOM;
+    global int $pref_workflow;
+
+    global int $pref_automaticConnections;
+    global int $pref_outputCacheTask;
+    global string $pref_outputCacheFolder;
+
+    global int $pref_globalTextureWidth;
+    global int $pref_globalTextureHeight;
+
+    global int $pref_bakeFormat;
+
+    // ...........................................................
+    float $bc = 0.25;
+    float $cc = 0.35;
+
+    int $_HEIGHT = 30;
+
+    int $windowHeight = 400;
+
+    global string $workflowName[];
+
+    string $workflowRadioCollection;
+    string $workflowButton[];
+
+    int $widthIndex, $heightIndex;
+
+    switch( $pref_globalTextureWidth ) {
+        case 32 : $widthIndex = 1; break;
+        case 64 : $widthIndex = 2; break;
+        case 128 : $widthIndex = 3; break;
+        case 256 : $widthIndex = 4; break;
+        case 512 : $widthIndex = 5; break;
+        case 1024 : $widthIndex = 6; break;
+        case 2018 : $widthIndex = 7; break;
+        case 4096 : $widthIndex = 8; break;
+        default: $widthIndex = 5; break;
+    }                
+    switch( $pref_globalTextureHeight ) {
+        case 32 : $heightIndex = 1; break;
+        case 64 : $heightIndex = 2; break;
+        case 128 : $heightIndex = 3; break;
+        case 256 : $heightIndex = 4; break;
+        case 512 : $heightIndex = 5; break;
+        case 1024 : $heightIndex = 6; break;
+        case 2018 : $heightIndex = 7; break;
+        case 4096 : $heightIndex = 8; break;
+        default: $heightIndex = 5; break;
+    }
+
+    // ............................................................................
+    window -title "Substance Preferences"
+           -widthHeight 500 $windowHeight
+           -backgroundColor $bc$bc$bc
+           -sizeable false
+            substancePreferencesWindow;
+
+        rowColumnLayout -numberOfColumns 1 -columnWidth 1 500   rl0;
+
+            // 1st block:
+            rowColumnLayout -numberOfColumns 2 -columnWidth 1 250  -columnWidth 2 250 -height 100;
+                // LEFT HALF:
+                frameLayout -label "General:" /*-backgroundColor $bc$bc$bc*/ -height 100;
+                    rowColumnLayout -numberOfColumns 2 ;
+                        // 1st column:
+                        text -label "Workflow:" -width 100; 
+
+                        // 2nd column:
+                        columnLayout -columnAttach "left" 0        coco;
+                            $workflowRadioCollection = `radioCollection`;
+                                $workflowButton[$_CLASSIC]      = `radioButton -label "Classic"
+                                                                               -onc ( "onWorkflowButton(" + $_CLASSIC + ")" )`;
+                                $workflowButton[$_STINGRAY_PBS] = `radioButton -label "StingrayPBS"
+                                                                               -onc ( "onWorkflowButton(" + $_STINGRAY_PBS + ")" )`;
+                                $workflowButton[$_CUSTOM]       = `radioButton -label "Custom"
+                                                                               -onc ( "onWorkflowButton(" + $_CUSTOM + ")" )`;
+                            radioButton -e -select $workflowButton[ $pref_workflow ];
+                        setParent ..;
+                    setParent ..;
+                setParent ..;
+
+                // RIGHT HALF:
+				// ToDo: when implementing preference's global width & height: remove '-visible false' from the following 
+				//       rowColumnLayout widgets...
+
+                frameLayout -label "" -height 100;
+
+                    // Note: do not use the label in the optionMenu command: the pulldown widget looks silly!
+                    // 1st pulldown:
+                    rowColumnLayout  -visible false -numberOfColumns 2 -columnWidth 1 130  -columnWidth 2 60 -height 15;
+
+                        text -label "Global texture width"; 
+
+                        optionMenu -label ""
+                                   -backgroundColor $cc$cc$cc
+                                   -changeCommand "onGlobalTextureWidth(#1)"
+                                    globalTextureWidthControl;
+                            menuItem -label "32";
+                            menuItem -label "64";
+                            menuItem -label "128";
+                            menuItem -label "256";
+                            menuItem -label "512";
+                            menuItem -label "1024";
+                            menuItem -label "2048";
+                            menuItem -label "4096";
+                    setParent ..;
+                    optionMenu -edit -select $widthIndex globalTextureWidthControl; // MEL's BS again! Can't do this at creation time!
+
+                    // 2nd pulldown:
+                    rowColumnLayout  -visible false -numberOfColumns 2 -columnWidth 1 130  -columnWidth 2 60;
+
+                        text -label "Global texture height"; 
+
+                        optionMenu -label ""
+                                   -backgroundColor $cc$cc$cc
+                                   -changeCommand "onGlobalTextureHeight(#1)"
+                                    globalTextureHeightControl;
+                            menuItem -label "32";
+                            menuItem -label "64";
+                            menuItem -label "128";
+                            menuItem -label "256";
+                            menuItem -label "512";
+                            menuItem -label "1024";
+                            menuItem -label "2048";
+                            menuItem -label "4096";
+                    setParent ..;
+                    optionMenu -edit -select $heightIndex globalTextureHeightControl; // MEL's BS...
+                setParent ..;
+            setParent ..;
+
+            // 2nd block
+            rowColumnLayout -numberOfColumns 1 -columnWidth 1 500;
+
+                frameLayout -label "Connections and caching:" /*-backgroundColor $bc$bc$bc*/ -height 205;
+                    rowLayout -nc 1 -columnAttach1 "left" -columnOffset1 20  -height $_HEIGHT;
+		                checkBox
+			                -l "Automatic connections"
+			                -ann "Automatic connections"
+	                        -v ($pref_automaticConnections == 1)
+			                -en ($pref_automaticConnections != -1)
+			                -onc ( "onAutomaticConnections(" + 1 + ")" )
+			                -ofc ( "onAutomaticConnections(" + 0 + ")" )
+                            automaticConnectionsPreference;
+                    setParent ..;
+
+                    rowLayout -nc 2 -columnAttach2 "left" "left" -columnOffset2 20 0 -height $_HEIGHT;
+                        text -label "Bake format"; 
+
+                        optionMenu -label ""
+                                   -backgroundColor $cc$cc$cc
+                                   -changeCommand ("onBakeFormat()")
+                                   //-changeCommand ("onBakeFormat(#1)")
+                                    bakeFormatControl;
+                            menuItem -label "jpg";
+                            menuItem -label "png";
+                            menuItem -label "tif";
+                            menuItem -label "tga";
+                    setParent ..;
+                    optionMenu -edit -select $pref_bakeFormat bakeFormatControl; // MEL's BS...
+
+                    columnLayout;
+                        text -label"";               // this is a separator!
+                    setParent ..;
+
+                    // ...........................................................................
+                    string $kButton1 = getPluginResource("SubstancePlugin", "kAECacheOutputNone");
+	                string $kButton2 = getPluginResource("SubstancePlugin", "kAECacheOutputMayaProjectFolder");
+	                string $kButton3 = getPluginResource("SubstancePlugin", "kAECacheOutputCustomFolder");
+	                string $kButton1Hint = getPluginResource("SubstancePlugin", "kAECacheOutputNoneHint");
+	                string $kButton2Hint = getPluginResource("SubstancePlugin", "kAECacheOutputMayaProjectFolderHint");
+	                string $kButton3Hint = getPluginResource("SubstancePlugin", "kAECacheOutputCustomFolderHint");
+
+                    string $outputCacheRadioCollection;
+                    string $outputCacheRadioButtonControl[];
+
+                    rowColumnLayout -numberOfColumns 2 ;
+                        // 1st column:
+                        text -label "Output cache:" -backgroundColor $bc$bc$bc -width 100; 
+
+                        // 2nd column:
+                        columnLayout -columnAttach "left" 0;
+                            $outputCacheRadioCollection = `radioCollection`;
+                                $outputCacheRadioButtonControl[0] = `radioButton -label $kButton1 -ann $kButton1Hint
+                                                                                 -onc ( "onPreferencesOutputCacheButton(" + 0 + ")" )`;
+                                $outputCacheRadioButtonControl[1] = `radioButton -label $kButton2 -ann $kButton2Hint
+                                                                                 -onc ( "onPreferencesOutputCacheButton(" + 1 + ")" )`;
+                                $outputCacheRadioButtonControl[2] = `radioButton -label $kButton3 -ann $kButton3Hint
+                                                                                 -onc ( "onPreferencesOutputCacheButton(" + 2 + ")" )`;
+
+                                radioButton -e -select $outputCacheRadioButtonControl[ $pref_outputCacheTask ];
+                        setParent ..;
+                    setParent ..;
+
+                    // ...........................................................................
+	                string $kFolder = getPluginResource("SubstancePlugin", "kAECacheOutputFolder");
+
+                    rowLayout -height $_HEIGHT
+                              -numberOfColumns 3
+	                          -columnWidth3 70 400 30
+			                  -columnAttach3 "left" "left" "left"
+			                  -columnOffset3 00 0 0
+			                  -adjustableColumn 2;
+
+		                text -label $kFolder cacheFolderTextControl;
+		                textField -text $pref_outputCacheFolder -ed false cacheFolderTextfieldControl;
+		                symbolButton -image "navButtonBrowse.png" -c ( "onPreferencesCacheFolder()" ) cacheFolderSymbolButtonControl;
+	                setParent ..;
+                setParent ..; 
+            setParent ..; 
+
+            // 3rd block
+            rowColumnLayout -numberOfColumns 1 -columnWidth 1 500;
+                frameLayout -label "" -height 70  -backgroundColor 0.4 0.4 0.4;
+                    rowLayout -numberOfColumns 2 -columnWidth2 250 250 -columnAttach2 "both" "both" -columnOffset2 50 50 -height 70; 
+                        button -label "Save" -backgroundColor $cc$cc$cc -command "onSaveSubstancePreferences";
+                        button -label "Cancel" -backgroundColor $cc$cc$cc -command "onCancelSubstancePreferences";
+                    setParent ..;
+                setParent ..;
+            setParent ..;  
+        setParent ..;  
+
+    window -edit -height $windowHeight substancePreferencesWindow; // Note: setting the window's height does not work in "config" mode (???)
+                                                                   //       ...so we do it here, in "edit" mode !!!
+     
+    // ......................................
+    global int $numWorkflows;
+    int $i;
+
+    updatePreferencesCacheFolderDialog();
+
+    showWindow substancePreferencesWindow;
+}
+
+// ..............................................................................
+// Get in / get out of "Substance Preferences" dialog:
+global proc onSaveSubstancePreferences() {
+
+    //print("onSaveSubstancePreferences() STARTS...\n");
+
+    global string $pref_version;
+
+    global int $pref_workflow;
+    global int $pref_globalTextureWidth;
+    global int $pref_globalTextureHeight;
+    global int $pref_automaticConnections;
+    global int $pref_bakeFormat;
+    global int $pref_outputCacheTask;
+    global string $pref_outputCacheFolder;
+
+    $filename = (`internalVar -userScriptDir` + "ReadSubstancePreferences.mel");
+    $file = `fopen $filename "w"`;
+    $EOL = "\r\n";
+
+    // ..........................................................................
+    fprint $file ("global proc ReadSubstancePreferences() {"  + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("    print(\"ReadSubstancePreferences()...  from user script folder\\n\");" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("    global int $substancePreferencesFlag;" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("    print(\"$substancePreferencesFlag = \" + $substancePreferencesFlag + \"\\n\");" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("    if ($substancePreferencesFlag == 0)" + $EOL);
+    fprint $file ("    {" + $EOL);
+    fprint $file ("        print(\"Reading...\\n\");" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        $substancePreferencesFlag = 1;" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        source \"PreferencesVariables.mel\";" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        global string $pref_version;" + $EOL);
+    fprint $file ("        $pref_version = \"" + $pref_version + "\";" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        global int $pref_workflow;" + $EOL);
+    fprint $file ("        global int $pref_globalTextureWidth;" + $EOL);
+    fprint $file ("        global int $pref_globalTextureHeight;" + $EOL);
+    fprint $file ("        global int $pref_automaticConnections;" + $EOL);
+    fprint $file ("        global int $pref_bakeFormat;" + $EOL);
+    fprint $file ("        global int $pref_outputCacheTask;     " + $EOL);
+    fprint $file ("        global string $pref_outputCacheFolder; " + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        global int $default_workflow;" + $EOL);
+    fprint $file ("        global int $default_globalTextureWidth;" + $EOL);
+    fprint $file ("        global int $default_globalTextureHeight;" + $EOL);
+    fprint $file ("        global int $default_automaticConnections;" + $EOL);
+    fprint $file ("        global int $default_bakeFormat;" + $EOL);
+    fprint $file ("        global int $default_outputCacheTask;     " + $EOL);
+    fprint $file ("        global string $default_outputCacheFolder; " + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        $pref_workflow             = " + $pref_workflow + ";" + $EOL);
+    fprint $file ("        $pref_globalTextureWidth   = " + $pref_globalTextureWidth + ";" + $EOL);
+    fprint $file ("        $pref_globalTextureHeight  = " + $pref_globalTextureHeight + ";" + $EOL);
+    fprint $file ("        $pref_automaticConnections = " + $pref_automaticConnections + ";" + $EOL);
+    fprint $file ("        $pref_bakeFormat           = " + $pref_bakeFormat + ";" + $EOL);
+    fprint $file ("        $pref_outputCacheTask      = " + $pref_outputCacheTask + ";" + $EOL);
+    fprint $file ("        $pref_outputCacheFolder    = \"" + $pref_outputCacheFolder + "\";" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("        global int $substanceDefaultsFlag;" + $EOL);
+    fprint $file ("        if ($substanceDefaultsFlag == 0)" + $EOL);
+    fprint $file ("        {" + $EOL);
+    fprint $file ("            print(\"Setting defaults...\\n\");" + $EOL);
+    fprint $file ("            $substanceDefaultsFlag = 1;" + $EOL);
+    fprint $file ($EOL);
+    fprint $file ("            $default_workflow             = $pref_workflow;" + $EOL);
+    fprint $file ("            $default_globalTextureWidth   = $pref_globalTextureWidth;" + $EOL);
+    fprint $file ("            $default_globalTextureHeight  = $pref_globalTextureHeight;" + $EOL);
+    fprint $file ("            $default_automaticConnections = $pref_automaticConnections;" + $EOL);
+    fprint $file ("            $default_bakeFormat           = $pref_bakeFormat;" + $EOL);
+    fprint $file ("            $default_outputCacheTask      = $pref_outputCacheTask;" + $EOL);
+    fprint $file ("            $default_outputCacheFolder    = $pref_outputCacheFolder;" + $EOL);
+    fprint $file ("        }" + $EOL);    fprint $file ($EOL);
+    fprint $file ("        print(\"...got Substance Preferences.\\n\");" + $EOL);
+    fprint $file ("    }" + $EOL);
+    fprint $file ("    else" + $EOL);
+    fprint $file ("        print(\"Skip.\\n\");" + $EOL);
+    fprint $file ("}" + $EOL);
+    fprint $file ($EOL);
+
+    // ..........................................................................
+    fclose $file;        
+
+    print("Saved \"" + $filename + "\"\n");
+    print("onSaveSubstancePreferences() DONE.\n");
+
+	rehash; // update Maya's script path!
+
+    onCancelSubstancePreferences();
+}
+global proc onCancelSubstancePreferences() {
+    print("onCancelSubstancePreferences() STARTS...\n");
+    //window -e -visible false substancePreferencesWindow;
+    deleteUI substancePreferencesWindow;
+}
+global proc Preferences() {
+    print("Preferences()...\n");
+
+	//eval("source ReadSubstancePreferences.mel"); // Force a new reading of the file.
+	source "ReadSubstancePreferences.mel";
+	ReadSubstancePreferences();
+
+    onPreferencesButton();
+}

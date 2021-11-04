@@ -1,0 +1,26 @@
+
+global string $pref_version = "1.0";
+
+global string $workflowName[] = {"Classic", "StingrayPBS", "Custom"};
+
+global int $substanceDefaultsFlag = 0;
+
+// PREFERENCES VARIABLES:
+global int $pref_workflow;
+global int $pref_globalTextureWidth;
+global int $pref_globalTextureHeight;
+global int $pref_automaticConnections;
+global int $pref_bakeFormat;		// this index is 1-based
+global int $pref_outputCacheTask;   // 0: use TMP dir., 1: use project dir, 2: use user folder
+global string $pref_outputCacheFolder;
+
+// DEFAULT VARIABLES (counterparts to Preference's):
+// (All Preferences variables are reflected here)
+// Default values are set in 'ReadSubstancePreferences.mel'
+global int $default_workflow;
+global int $default_globalTextureWidth;
+global int $default_globalTextureHeight;
+global int $default_automaticConnections;
+global int $default_bakeFormat;
+global int $default_outputCacheTask;
+global string $default_outputCacheFolder;

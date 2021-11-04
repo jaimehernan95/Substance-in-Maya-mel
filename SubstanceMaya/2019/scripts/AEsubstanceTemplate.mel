@@ -1,0 +1,2922 @@
+// Copyright (C) 1997-2011 Autodesk, Inc., and/or its licensors.
+// All rights reserved.
+//
+// The coded instructions, statements, computer programs, and/or related
+// material (collectively the "Data") in these files contain unpublished
+// information proprietary to Autodesk, Inc. ("Autodesk") and/or its licensors,
+// which is protected by U.S. and Canadian federal copyright law and by
+// international treaties.
+//
+// The Data is provided for use exclusively by You. You have the right to use,
+// modify, and incorporate this Data into other products for purposes authorized
+// by the Autodesk software license agreement, without fee.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. AUTODESK
+// DOES NOT MAKE AND HEREBY DISCLAIMS ANY EXPRESS OR IMPLIED WARRANTIES
+// INCLUDING, BUT NOT LIMITED TO, THE WARRANTIES OF NON-INFRINGEMENT,
+// MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, OR ARISING FROM A COURSE
+// OF DEALING, USAGE, OR TRADE PRACTICE. IN NO EVENT WILL AUTODESK AND/OR ITS
+// LICENSORS BE LIABLE FOR ANY LOST REVENUES, DATA, OR PROFITS, OR SPECIAL,
+// DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES, EVEN IF AUTODESK AND/OR ITS
+// LICENSORS HAS BEEN ADVISED OF THE POSSIBILITY OR PROBABILITY OF SUCH DAMAGES.
+
+//**************************************************************************/
+// Copyright (c) 2009 Allegorithmic, SAS.
+//***************************************************************************/
+
+// Naming convention
+// sbs_ functions are C API extern
+// sbsCamelCase functions are MEL API and should not be tampered with
+
+global int	$sbs_PreventSubstanceOutColorFromBeingConnectedDirectly = 1;
+global int	$sbs_OverrideDefaulTextureSize							= 1;
+global int	$sbs_DefaultTextureSize									= 512;
+
+global float $sbsTextureSizeAspectRatio								= 1.0;
+global float $sbsTextureSizeAspectRatioExportImages					= 1.0;
+global int $sbs_PackageHasJustBeenChanged							= 0;
+global int $sbs_Indent												= 170;
+global int $sbs_AutomaticBakeCheck									= 0;
+
+//Export images to disk globals
+global string   $sbsExportImagesToDiskPath							= "";
+global int      $sbsCreateShaderNetworkExportImages					= 0;
+global int      $sbsTextureWidthExportImages						= 512;
+global int      $sbsTextureHeightExportImages						= 512;
+global int      $sbsKeepAspectRatioExportImages						= 1;
+global string   $sbsImageFormatExportImages							= "jpg";
+
+//Image/Icons files
+global string $g_OutputConnectedUpAndDownStreamImage	= "sbs_button_green.png";
+global string $g_OutputConnectedUpStreamImage			= "sbs_button_orange.png";
+global string $g_OutputNotConnectedImage				= "sbs_button_grey.png";
+
+global string $g_outputCacheRadioButtonControl[];
+global int $g_outputCacheTask = 0;   // 0: use TMP dir. (no cache), 1: use project dir, 2: use user defined folder
+global string $g_outputCacheFolder = "";
+global string $g_NodeName = "";
+
+// #####################################################################################################
+// Print tools:
+global int $sbs_debug = -1;                 // possible values: -1: not set, 0: verbose OFF, 1: verbose ON
+
+global proc milestone(string $message) {    // used for important/major task print statement
+    global int $sbs_debug;                  // (easy to see within accumulation of print statements!)
+    if ($sbs_debug) {
+        print("\n" + $message + "\n");
+    }
+}
+
+global int $counter = 0; // This helps identifying, in the ScriptEditor, the latest actions
+                         // taken by Maya & plugin. It's a visual reference of our print statements
+                         // within the Maya generated logs.
+
+global proc _show(string $message) {    // used by both mel & python
+    global int $counter;
+    global int $sbs_debug;
+
+    if ($sbs_debug == -1)
+        $sbs_debug = cpp_GetVerbose();  // Execute the C++ verbose setting function
+
+    if ($sbs_debug) {
+        print($counter + " " + $message + "\n");
+        $counter += 1;
+    }
+}
+
+global proc show(string $message) { // used for general print statement
+    _show("MEL: " + $message);
+}
+
+global proc conn(string $message) { // used for connection print statement
+    _show("MEL:         " + $message);
+}
+
+global proc sbsDebugPrint(string $message) {
+    _show("MEL (Debug):  " + $message);
+}
+
+// #####################################################################################################
+global proc updateGUI(string $nodeName, int $workflow)
+{
+    show("updateGUI( " + $nodeName + ", " + $workflow + " )");
+    if ($workflow == 2) {
+        // disable "Create shader network"...
+        button -e -enable false createShadingNetButton;
+    }
+    else {
+        button -e -enable true createShadingNetButton;
+    }
+}
+
+proc createAllChannelsAttributes(string $nodeName, string $channelsNames[]) {
+    show("createAllChannelsAttributes( " + $nodeName + ", ... )...");
+
+    string $prefix = "outputdyn_";
+
+    int $prefixSize = size($prefix);
+
+    //Ignore changes
+    setAttr ($nodeName+".ignoreChanges") 1.0;
+
+    //We must remove the old dynamic channels attributes if any
+    string $attrNames[] = `listAttr $nodeName`;
+    string $curChannel = "";
+    for ($attrName in $attrNames) {
+		if (size($attrName) > $prefixSize && substring($attrName,1,$prefixSize) == $prefix) {
+			//It's a dynamic attribute, so remove it
+			if ( `attributeQuery -exists -node $nodeName $attrName` == true) {
+				// Remove old connected nodes
+				string $connectedNodes[] = `listConnections -type "substanceOutput" ($nodeName+"."+$attrName)`;
+				if (size($connectedNodes)) {
+					// Check if it's used
+					int $used = 0;
+					$curChannel = "";
+					for ($curChannel in $channelsNames) {
+						$attrChannelName = $prefix + $curChannel+"_Name";
+						$attrChannelColor = $prefix + $curChannel+"_Color";
+						$attrChannelUV = $prefix + $curChannel+"_uvCoord";
+						$attrChannelAlpha = $prefix + $curChannel+"_Alpha";
+						if ($attrName==$attrChannelName || $attrName==$attrChannelColor || $attrName==$attrChannelUV || $attrName==$attrChannelAlpha) {
+							$used = 1;
+						}
+					}
+					if ($used == 0) {
+						// Remove it
+						delete $connectedNodes[0];
+					}
+				}
+
+				deleteAttr -at $attrName $nodeName; //It may happen when deleting the parent of an attribute that the children are automatically deleted
+			}
+		}
+	}
+
+	$curChannel = "";
+	//Create all channels attributes
+	for ($curChannel in $channelsNames) {
+		//Create the substance channel name attribute
+		$attrNameWithPrefix = $prefix + $curChannel+"_Name";
+		if ( `attributeQuery -exists -node $nodeName $attrNameWithPrefix` == false) {
+			addAttr -w 1 -r 1 -s 1 -k 0 -h 1 -dt "string" -ln $attrNameWithPrefix $nodeName;
+			setAttr ($nodeName+"."+$attrNameWithPrefix) -type "string" $curChannel;
+		}
+
+		//Create the out color attribute
+		$attrNameWithPrefix = $prefix + $curChannel+"_Color";
+		string $colorName = $attrNameWithPrefix;
+		if ( `attributeQuery -exists -node $nodeName $attrNameWithPrefix` == false) {
+			//Will contain the RGB values
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at float3 -ln $attrNameWithPrefix $nodeName;
+
+			//Add the subattributes
+			string $subattr = $attrNameWithPrefix+"_r";
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at "float" -ln $subattr -parent $attrNameWithPrefix $nodeName;
+			$subattr = $attrNameWithPrefix+"_g";
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at "float" -ln $subattr -parent $attrNameWithPrefix $nodeName;
+			$subattr = $attrNameWithPrefix+"_b";
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at "float" -ln $subattr -parent $attrNameWithPrefix $nodeName;
+		}
+
+		//Create the UVCoord attributes
+		string $uvCoordsAttr = $prefix + $curChannel+"_uvCoord";
+		if ( `attributeQuery -exists -node $nodeName $uvCoordsAttr` == false) {
+			//Will contain the U and V coordinates
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at float2 -ln $uvCoordsAttr $nodeName;
+
+			//Add the subattributes U and V
+			string $subattr = $uvCoordsAttr+"_u";
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at "float" -ln $subattr -parent $uvCoordsAttr $nodeName;
+			$subattr = $uvCoordsAttr+"_v";
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at "float" -ln $subattr -parent $uvCoordsAttr $nodeName;
+		}
+
+		//Not attached to the parent
+		$attrNameWithPrefix = $prefix + $curChannel+"_Alpha";
+		if ( `attributeQuery -exists -node $nodeName $attrNameWithPrefix` == false) {
+			addAttr -w 0 -r 1 -s 0 -h 1 -k 0 -at "float" -ln $attrNameWithPrefix $nodeName;
+		}
+	}
+
+	setAttr ($nodeName+".ignoreChanges") 0.0; //reset ignore flag
+}
+
+global proc int isNormalFormatPresent(string $nodeName) {
+    sbsDebugPrint("Calling isNormalFormatPresent for node : "+$nodeName);
+    string $packageName = `getAttr ($nodeName+".package")`;
+    string $graphName	= `getAttr ($nodeName+".graph")`;
+    if (! size($packageName) || ! size($graphName)) {
+        return 0;
+	}
+
+    string $inputs[] = cpp_GetAllInputsFromSubstanceNode($nodeName);
+
+    int $numAttr = size($inputs) / 9;
+    int $i = 0;
+    int $imageNumber = 0;
+    for ($i=0; $i<$numAttr; $i++) {
+        int $index = 9 * $i;
+        string $attrName = $inputs[$index+2];
+        sbsDebugPrint("isNormalFormatPresent, attrname = "+$attrName);
+        if ( ($attrName == "NormalFormat") || ($attrName == "$normalformat") || ($attrName == "normalformat") ) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+global proc CreateGUI_Inputs(string $attributeName) {
+    show("### CreateGUI_Inputs( " + $attributeName + " )...");
+    UpdateGUI_Inputs($attributeName);
+}
+
+global proc UpdateGUI_Inputs(string $attributeName) {
+    show("### UpdateGUI_Inputs( " + $attributeName + " )...");
+
+    string $kLayoutSubstance = getPluginResource("SubstancePlugin", "kAELayoutSubstance");
+
+    if (`columnLayout -exists $kLayoutSubstance`) {
+        deleteUI -layout $kLayoutSubstance;
+    }
+
+    setUITemplate -pst attributeEditorTemplate;
+
+    columnLayout -adjustableColumn true $kLayoutSubstance;
+
+    string $nodeName = `match "[^.]*" $attributeName`;
+    string $prefix = "dyn_";
+    string $inputs[] = cpp_GetAllInputsFromSubstanceNode($nodeName);
+	string $group = "";
+	int $hasGroup = 0;
+
+	int $numAttr = size($inputs)/9;
+	int $i=0;
+	for ($i=0; $i<$numAttr; $i++) {
+		int $index = 9 * $i;
+		string $attrType = $inputs[$index+0];
+		string $attrWidgetType = $inputs[$index+1];
+		string $attrName = $inputs[$index+2];
+		string $labelName = $inputs[$index+3];
+		string $groupName = $inputs[$index+4];
+		string $attrVal = $inputs[$index+5];
+		string $attrMin = $inputs[$index+6];
+		string $attrMax = $inputs[$index+7];
+		string $attrClamp = $inputs[$index+8];
+
+		if (size($attrName)>0 && substring($attrName,1,1)=="$") { continue;	}
+
+		if ($groupName != $group) {
+			if ($hasGroup==1) {
+				setParent ..;
+			}
+
+			frameLayout  -bv false $groupName;  //-bs "out"
+			$group = $groupName;
+			$hasGroup = 1;
+		}
+
+		string $prefixWithAttr = $prefix + $attrName;
+		string $prefixWithAttrX = $prefix + $attrName + "_x";
+		string $prefixWithAttrY = $prefix + $attrName + "_y";
+		string $prefixWithAttrZ = $prefix + $attrName + "_z";
+		string $prefixWithAttrW = $prefix + $attrName + "_w";
+		string $prefixWithAttrA = $prefix + $attrName + "_alpha_compound";
+		if (`attributeQuery -exists -node $nodeName $prefixWithAttr`==false
+			&& `attributeQuery -exists -node $nodeName $prefixWithAttrX`==false
+			&& `attributeQuery -exists -node $nodeName $prefixWithAttrY`==false
+			&& `attributeQuery -exists -node $nodeName $prefixWithAttrZ`==false
+			&& `attributeQuery -exists -node $nodeName $prefixWithAttrW`==false
+			&& `attributeQuery -exists -node $nodeName $prefixWithAttrA`==false)
+		{
+			continue;
+		}
+
+		if ($attrType == "float" || $attrType == "long") {
+			if ($attrType == "long" && $attrWidgetType=="combo") {
+				string $enumContent = "";
+				int $count = cpp_GetEnumCount($nodeName, $attrName);
+				for ($k=0 ; $k<$count ; ++$k)
+				{
+					string $enumName = cpp_GetEnumName($nodeName, $attrName, $k);
+					int $enumValue = cpp_GetEnumValue($nodeName, $attrName, $k);
+					$enumContent = $enumContent + " -ei " + $enumValue + " \"" + $enumName + "\" ";
+				}
+				eval("attrEnumOptionMenuGrp -l \""+$labelName+"\" -at "+$nodeName + "." + $prefixWithAttr + $enumContent +" -enable 1");
+			}
+			else {
+				int $isClamped = substring( $attrClamp, size($attrClamp), size($attrClamp)) == "1";
+				if ($isClamped && size($attrMin)>4 && size($attrMax)>4) {
+					eval("attrFieldSliderGrp -attribute "+$nodeName + "." + $prefixWithAttr+" -label \""+$labelName+"\" -min "+substring($attrMin, 5,size($attrMin))+" -max "+substring($attrMax, 5,size($attrMax)));
+                } else {
+                    attrFieldSliderGrp -attribute ($nodeName + "." + $prefixWithAttr) -label $labelName;
+                }
+            }
+
+        } else if ($attrType == "string") {   // support for Framework 6's text object
+
+            string $realAttrval = "";
+            if (size($attrVal) > 4) {
+                $realAttrval = substring($attrVal, 5,size($attrVal)); // get rid of "val="
+            }
+
+            string $substanceTextWidget = `textFieldGrp`;
+
+            string $value = $realAttrval;
+            if ($realAttrval == "     ") // 5 spaces (when widget's text field is empty: there's a MPlug object bug/crash)
+                $value = ""; // don't print the 5 spaces in the text widget
+
+            textFieldGrp -e  -label $labelName -text $value -width 20 $substanceTextWidget;
+
+           	// Set callback
+        	textFieldGrp -e -cc ( "SubstanceTextEntered(\"" + $nodeName + "\",\"" + $attrName + "\",\"" + $substanceTextWidget + "\")" ) $substanceTextWidget;
+
+        } else if ( $attrType == "float2" || $attrType == "long2" ) {
+            attrFieldGrp -attribute ($nodeName + "." + $prefixWithAttr) -label $labelName -numberOfFields 2;
+		} else if ( $attrType == "float3" && $attrWidgetType=="color" || $attrType == "image") {
+			attrColorSliderGrp -attribute ($nodeName + "." + $prefixWithAttr) -label $labelName;
+		} else if ( $attrType == "float3" || $attrType == "long3" ) {
+			attrFieldGrp -attribute ($nodeName + "." + $prefixWithAttr) -label $labelName -numberOfFields 3;
+		} else if ( $attrType == "float4" && $attrWidgetType=="color") {
+			attrColorSliderGrp -attribute ($nodeName + "." + $prefixWithAttr) -label $labelName;
+			attrFieldSliderGrp -attribute ($nodeName + "." + $prefixWithAttrA) -label ($labelName+" Alpha");
+		} else if ( $attrType == "float4" || $attrType == "long4" ) {
+			attrFieldSliderGrp -attribute ($nodeName + "." + $prefixWithAttrX) -label ($labelName+".x");
+			attrFieldSliderGrp -attribute ($nodeName + "." + $prefixWithAttrY) -label ($labelName+".y");
+			attrFieldSliderGrp -attribute ($nodeName + "." + $prefixWithAttrZ) -label ($labelName+".z");
+			attrFieldSliderGrp -attribute ($nodeName + "." + $prefixWithAttrW) -label ($labelName+".w");
+		}
+	}
+
+	setParent ..;
+	setUITemplate -ppt;
+}
+
+global proc CreateInput(string $nodeName, string $inputs[], int $input_index) {
+
+	string $prefix = "dyn_";
+	int $index = 9 * $input_index;
+	string $attrType = $inputs[$index+0];
+	string $attrWidgetType = $inputs[$index+1];
+	string $attrName = $inputs[$index+2];
+	string $labelName = $inputs[$index+3];
+	string $groupName = $inputs[$index+4];
+	string $attrVal = $inputs[$index+5];
+	string $attrMin = $inputs[$index+6];
+	string $attrMax = $inputs[$index+7];
+	string $attrClamp = $inputs[$index+8];
+
+	show("CreateInput( " + $nodeName + ", " + $inputs[$index+2] + " )...");
+
+	if ($attrName == "$time") {
+		$attrName = "inTime";
+		$labelName = "inTime";
+		$attrType = "time";
+	}
+
+	int $isClamped = substring( $attrClamp, size($attrClamp), size($attrClamp)) == "1";
+
+	string $attrNameWithSpaces = $labelName;
+	string $attrNameWithPrefix = $prefix + $attrName;
+
+	string $cmd = "addAttr -w 1 -r 1 -s 1 -k 1 -h 1 -ln \""+$attrNameWithPrefix+"\" -nn \""+$attrNameWithSpaces+"\"";
+
+	if ((($attrType == "float3" || $attrType == "float4") && $attrWidgetType=="color") || $attrType=="image") {
+		$cmd += " -usedAsColor";
+	}
+
+	if ( size($attrVal) > 4 && ( $attrType == "float" || $attrType == "long" ) ) {
+		//value has been set, so add it (remove "val=" inside)
+		string $realAttrval = substring($attrVal, 5,size($attrVal));
+		$cmd += " -dv "+$realAttrval;
+
+		if (size($attrMin) > 4) {
+			string $realAttrMin = substring($attrMin, 5,size($attrMin));
+			$cmd += " -smn "+$realAttrMin;
+
+			if ($isClamped) {
+				//min value has been set, so add it (remove "min=" inside)
+				$cmd += " -min "+$realAttrMin;
+			}
+		}
+
+		if (size($attrMax) > 4) {
+			//max value has been set, so add it (remove "max=" inside)
+			string $realAttrMax = substring($attrMax, 5,size($attrMax));
+			$cmd += " -smx "+$realAttrMax;
+
+			if ($isClamped) {
+				$cmd += " -max "+$realAttrMax;
+			}
+		}
+	}
+
+    if ($attrType == "string") {   // support for Framework 6's text object
+		$cmd += " -dt \""+$attrType + "\" " +$nodeName; //Data type
+	} else if ($attrType == "float4" && $attrWidgetType=="color") {
+		$cmd += " -at \"float3\" " +$nodeName; //Attribute type
+	} else if ($attrType == "float4" || $attrType == "long4") {
+		$cmd += " -at \"compound\" -nc 4 " +$nodeName;
+	} else if ( $attrType == "image" ) {
+		$cmd += " -at \"float3\" " +$nodeName; //Attribute type
+	} else {
+		$cmd += " -at \""+$attrType + "\" " +$nodeName; //Attribute type
+	}
+
+	eval($cmd);
+
+	if ($attrName == "inTime") {
+        conn("01: connectAttr -f time1.outTime " + $nodeName + ".dyn_inTime");
+		connectAttr -f "time1.outTime" ($nodeName+".dyn_inTime");
+	}
+
+	//Attribute values will be used for float2, 3 and 4 and long2, 3 and 4
+	string $realAttrval = "";
+	if (size($attrVal) > 4) {
+		$realAttrval = substring($attrVal, 5,size($attrVal));
+	}
+
+	if ( $attrType == "float2") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+	} else if ( $attrType == "float3" || $attrType == "image") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_z";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+	} else if ( $attrType == "float4" && $attrWidgetType=="color") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_z";
+		addAttr -hidden true -at "float" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		string $realAttrs[] = stringToStringArray($realAttrval, " ");
+		string $cmd = "addAttr -w 1 -r 1 -s 1 -k 1 -h 1 -at \"float\" -ln \""+$attrNameWithPrefix+"_alpha_compound\" -nn \""+$attrNameWithSpaces+" Alpha\" -dv "+$realAttrs[3]+" -smn 0.0 -smx 1.0";
+		eval($cmd);
+	} else if ( $attrType == "float4") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		string $nnattr = $attrNameWithSpaces + " X";
+		addAttr -hidden true -at "float" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		$nnattr = $attrNameWithSpaces + " Y";
+		addAttr -hidden true -at "float" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_z";
+		$nnattr = $attrNameWithSpaces + " Z";
+		addAttr -hidden true -at "float" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_w";
+		$nnattr = $attrNameWithSpaces + " W";
+		addAttr -hidden true -at "float" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+	} else if ( $attrType == "long2") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		addAttr -hidden true -at "long" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		addAttr -hidden true -at "long" -ln $subattr -p $attrNameWithPrefix $nodeName;
+	} else if ( $attrType == "long3") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		addAttr -hidden true -at "long" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		addAttr -hidden true -at "long" -ln $subattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_z";
+		addAttr -hidden true -at "long" -ln $subattr -p $attrNameWithPrefix $nodeName;
+	} else if ( $attrType == "long4") {
+		//Add the subattributes
+		string $subattr = $attrNameWithPrefix+"_x";
+		string $nnattr = $attrNameWithSpaces + " X";
+		addAttr -hidden true -at "long" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_y";
+		$nnattr = $attrNameWithSpaces + " Y";
+		addAttr -hidden true -at "long" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_z";
+		$nnattr = $attrNameWithSpaces + " Z";
+		addAttr -hidden true -at "long" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+
+		$subattr = $attrNameWithPrefix+"_w";
+		$nnattr = $attrNameWithSpaces + " W";
+		addAttr -hidden true -at "long" -ln $subattr -nn $nnattr -p $attrNameWithPrefix $nodeName;
+	}
+
+    if ( $attrType == "string") {   // support for Framework 6's text object
+
+        if ($realAttrval == "")
+        {
+            // Here: the substance text's default value is empty!, so put spaces in there (otherwise hell brakes loose in cpp's Maya MPlug object: "dirtyPlug")
+            $realAttrval = "     "; // 5 spaces
+        }
+
+		$cmd = "setAttr \""+$nodeName +"."+$attrNameWithPrefix+"\" -type \""+$attrType+"\" " + "\""+$realAttrval+"\"";
+		eval($cmd);
+	} else if ( $attrType == "float2" || $attrType == "float3" || $attrType == "long2" || $attrType == "long3" ) {
+		$cmd = "setAttr \""+$nodeName +"."+$attrNameWithPrefix+"\" -type \""+$attrType+"\" "+$realAttrval;
+		eval($cmd);
+	} else if( $attrType == "float4" && $attrWidgetType=="color") {
+		$cmd = "setAttr \""+$nodeName +"."+$attrNameWithPrefix+"\" -type \"float3\" "+$realAttrval;
+		eval($cmd);
+		string $realAttrs[] = stringToStringArray($realAttrval, " ");
+		$subattr = $attrNameWithPrefix+"_alpha_compound";
+		$cmd = "setAttr "+$nodeName +"."+$subattr+" "+$realAttrs[3];
+	} else if( $attrType == "float4" || $attrType == "long4" ) {
+		string $realAttrs[] = stringToStringArray($realAttrval, " ");
+		string $subattr = $attrNameWithPrefix+"_x";
+
+		$cmd = "setAttr "+$nodeName +"."+$subattr+" "+$realAttrs[0];
+		eval($cmd);
+		$subattr = $attrNameWithPrefix+"_y";
+		$cmd = "setAttr "+$nodeName +"."+$subattr+" "+$realAttrs[1];
+		eval($cmd);
+		$subattr = $attrNameWithPrefix+"_z";
+		$cmd = "setAttr "+$nodeName +"."+$subattr+" "+$realAttrs[2];
+		eval($cmd);
+		$subattr = $attrNameWithPrefix+"_w";
+		$cmd = "setAttr "+$nodeName +"."+$subattr+" "+$realAttrs[3];
+		eval($cmd);
+	}
+}
+
+global proc updateTweaks(string $nodeName, string $packageName, string $graphName) {
+	show("####### updateTweaks( " + $nodeName + ", " + $packageName + ", " + $graphName + " )...");
+
+	//Ignore changes
+
+    setAttr ($nodeName + ".ignoreChanges") 1.0;
+
+	string $prefix = "dyn_";
+
+	//Load all tweaks from graph
+    string $inputs[] = cpp_GetAllInputsFromSubstanceNode($nodeName);
+
+	// returned inputs follow this convention :
+	//$inputs[n*9+0] = type
+	//$inputs[n*9+1] = widget type
+	//$inputs[n*9+2] = name
+	//$inputs[n*9+3] = label
+	//$inputs[n*9+4] = group
+	//$inputs[n*9+5] = "val=xxx" or "val=" if no default value is present
+	//$inputs[n*9+6] = "min=xxx" or "min=" if no min is present
+	//$inputs[n*9+7] = "max=xxx" or "max=" if no max is present
+	//$inputs[n*9+8] = "clamp=0" or "clamp=1"
+
+	int $numAttr = size($inputs) / 9;
+	int $i=0;
+	for ($i=0; $i<$numAttr; $i++) {
+		int $index		 = 9 * $i;
+		string $attrType = $inputs[$index+0];
+		string $attrWidgetType = $inputs[$index+1];
+		string $attrName = $inputs[$index+2];
+		string $labelName = $inputs[$index+3];
+
+		if ( $attrType == "boolean" ||
+            $attrType == "string" ||
+			$attrType == "float" || $attrType == "float2" || $attrType == "float3" || $attrType == "float4" ||
+			$attrType == "long" || $attrType == "long2" || $attrType == "long3" || $attrType == "long4" || $attrType == "image" )
+		{
+			if ($attrName != "$time" && size($attrName)>0 && substring($attrName,1,1)=="$") {
+				continue;
+			}
+
+            string $attrNameWithPrefix = $prefix + $attrName;
+
+			// convert old float4
+			if (`attributeQuery -exists -node $nodeName $attrNameWithPrefix`==true) {
+				if ($attrType == "float4" && $attrWidgetType=="color") {
+					string $alphaAttribute = $attrNameWithPrefix+"_alpha_compound";
+					if (`attributeQuery -exists -node $nodeName $alphaAttribute`==false) {
+						$cmd = "deleteAttr \""+$nodeName+"."+$attrNameWithPrefix+"\"";
+						eval($cmd);
+					}
+				}
+			}
+
+			if (`attributeQuery -exists -node $nodeName $attrNameWithPrefix`==false) {
+				// create input if it doesn't exist
+				CreateInput($nodeName, $inputs, $i);
+			}
+			else if (`attributeQuery -node $nodeName -hidden $attrNameWithPrefix`==false) {
+				// re-create input with hidden flag when it comes from an older Maya version
+				string $cmd;
+
+				// create temporary node
+				if (`objExists substanceOldVersionConverter`==false) {
+					$cmd = "createNode \"transform\" -n \"substanceOldVersionConverter\"";
+					eval($cmd);
+				}
+
+				// create temporary input
+				CreateInput("substanceOldVersionConverter", $inputs, $i);
+
+				// copy input to temporary one
+				$cmd = "copyAttr -inConnections -outConnections -containerParentChild -values -attribute \""+$attrNameWithPrefix+"\" \""+$nodeName+"\" substanceOldVersionConverter";
+				eval($cmd);
+
+				// delete deprecated input
+				$cmd = "deleteAttr \""+$nodeName+"."+$attrNameWithPrefix+"\"";
+				eval($cmd);
+
+				// create valid input
+				CreateInput($nodeName, $inputs, $i);
+
+				// copy temporary input to new one
+				$cmd = "copyAttr -inConnections -outConnections -containerParentChild -values -attribute \""+$attrNameWithPrefix+"\" substanceOldVersionConverter \""+$nodeName+"\"";
+				eval($cmd);
+			}
+		}
+	}
+
+	if (`objExists substanceOldVersionConverter`==true) {
+		string $cmd = "delete substanceOldVersionConverter";
+		eval($cmd);
+	}
+
+	setAttr ($nodeName+".ignoreChanges") 0.0; //reset ignore flag
+}
+
+proc createTweaks(string $nodeName, string $packageName, string $graphName) {
+	show("####### createTweaks( " + $nodeName + ", " + $packageName + ", " + $graphName + " )...");
+
+	//Ignore changes
+
+    setAttr ($nodeName+".ignoreChanges") 1.0;
+
+	sbsDebugPrint( "calling createTweaks, nodename	= " +$nodeName+ " packagename = "+$packageName +" graphname = "+$graphName);
+
+    string $prefix = "dyn_";
+
+	//We must remove the old dynamic attributes if any
+	string $attrNames[] = `listAttr $nodeName`;
+	for ($attrName in $attrNames) {
+		if (size($attrName) > 4 && substring($attrName,1,4) == $prefix) {
+			//It's a dynamic attribute, so remove it
+			if ( `attributeQuery -exists -node $nodeName $attrName` == true)
+				deleteAttr -at $attrName $nodeName; //It may happen when deleting the parent of an attribute that the children are automatically deleted
+		}
+	}
+	setAttr ($nodeName+".ignoreChanges") 0.0; //reset ignore flag
+
+	updateTweaks($nodeName, $packageName, $graphName);
+}
+
+global proc RecreateShaderNetwork(string $nodeName) {
+	show("RecreateShaderNetwork( " + $nodeName + " )...");
+
+    // Clean up the "scene" (only keep the texture and substance objects)
+    int $numDeletedObjects = resetScene($nodeName);
+
+    if ($numDeletedObjects >= 6) {
+        sbsCreateShadingNet($nodeName);
+    }
+}
+
+global proc updateUIWithCurrentSubstanceFile(string $nodeName) {
+	show("updateUIWithCurrentSubstanceFile( " + $nodeName + " )...");
+
+	global string $g_OutputConnectedUpAndDownStreamImage;
+	global string $g_OutputConnectedUpStreamImage;
+	global string $g_OutputNotConnectedImage;
+
+	string $package = `getAttr ($nodeName+".package")`;
+    string $graph	= `getAttr ($nodeName+".graph")`;
+
+    sbsDebugPrint("updateUIWithCurrentSubstanceFile, package =" +$package+" graph = "+$graph+"\n");
+
+	//Update UI
+	string $channelsNames[]	= cpp_GetChannelsNamesFromSubstanceNode($nodeName);
+
+	int $relocalized = `getAttr ($nodeName+".relocalized")`;
+	if (!$relocalized) {
+		//Create all out attributes from all channels names, one for each channel to tell if it is available or not
+		createAllChannelsAttributes($nodeName, $channelsNames);
+		reconnectShadingNetwork($nodeName, $channelsNames);
+	}
+
+	int $numChannels = size($channelsNames);
+	int $i;
+	treeView -e -ra treeControlChannel;
+	for ($i=0; $i<$numChannels; $i++) {
+		string $channelName = $channelsNames[$i];
+		treeView -e -addItem $channelName "" treeControlChannel;
+		int $state = getSubstanceOutputNodeState($nodeName, $channelName);
+		switch ($state) {
+			case 1:
+				treeView -e -image ($channelName) 1 $g_OutputConnectedUpStreamImage treeControlChannel;
+				break;
+			case 2:
+				treeView -e -image ($channelName) 1 $g_OutputConnectedUpAndDownStreamImage treeControlChannel;
+				break;
+			case 0:
+			default:
+				treeView -e -image ($channelName) 1 $g_OutputNotConnectedImage treeControlChannel;
+				break;
+		}
+	}
+
+	//Update button caption
+	textField -e -text $package textFieldSubstanceFile;
+
+	$relocalized = `getAttr ($nodeName+".relocalized")`;
+	if (!$relocalized) {
+		//Create the dynamic parameters
+		createTweaks($nodeName, $package, $graph);
+
+		if (`attrEnumOptionMenuGrp -exists attrEnumOptionGroupNormalFormat`) {
+			int $enabled = isNormalFormatPresent($nodeName);
+			attrEnumOptionMenuGrp -e -enable $enabled attrEnumOptionGroupNormalFormat;
+		}
+	}
+
+	if ($relocalized) {
+		setAttr ($nodeName+".relocalized") 0;
+	}
+}
+
+global proc SubstanceFileEntered(string $nodeName) {
+	show("### SubstanceFileEntered( " + $nodeName + " )...");
+
+	//Set package filename in attribute
+	string $filename			= `textField -q -text textFieldSubstanceFile`;
+
+	sbsRemoveAllDynamicAttributes($nodeName);
+	setAttr ($nodeName+".package") -type "string" ($filename);
+}
+
+global proc SubstanceTextEntered(string $nodeName, string $attrName, string $substanceTextWidget) {
+	show("### SubstanceTextEntered( " + $nodeName + ", " + $attrName + ", " + $substanceTextWidget + " )...");
+
+    // support for Framework 6's text object
+    string $myAttrName = "dyn_" + $attrName;
+	string $myTextValue = `textFieldGrp -q -text $substanceTextWidget`;
+
+    if ($myTextValue == "")
+    {
+        // Here: the user emptied the text field, so put spaces in there (otherwise hell brakes loose in cpp's Maya MPlug object: "dirtyPlug")
+        $myTextValue = "     ";  // 5 spaces
+    }
+
+	setAttr ($nodeName + "." + $myAttrName) -type "string" ($myTextValue);
+
+    // Set callback again (because it's only good for one use!)
+    textFieldGrp -e -cc ( "SubstanceTextEntered(\"" + $nodeName + "\",\"" + $attrName + "\",\"" + $substanceTextWidget + "\")" ) $substanceTextWidget;
+}
+
+global proc sbsRemoveAllDynamicAttributes(string $nodeName) {
+	show("sbsRemoveAllDynamicAttributes( " + $nodeName + " )...");
+
+	string $prefix = "dyn_";
+
+    //We must remove the old dynamic attributes if any
+	string $attrNames[] = `listAttr $nodeName`;
+	for ($attrName in $attrNames) {
+        show("    $attrName = " + $attrName);
+		if (size($attrName) > 4 && substring($attrName,1,4) == $prefix) {
+			//It's a dynamic attribute, so remove it
+			if ( `attributeQuery -exists -node $nodeName $attrName` == true) {
+				deleteAttr -at $attrName $nodeName; //It may happen when deleting the parent of an attribute that the children are automatically deleted
+    		}
+		}
+	}
+}
+
+global proc Relocalize(string $nodeName, string $newpath) {
+	show("### Relocalize( " + $nodeName + ", " + $newpath + " )...");
+
+	setAttr ($nodeName+".relocalized") 1;
+	setAttr ($nodeName+".package") -type "string" ($newpath);
+	updateGraphItems($nodeName);
+	UpdateGUI_TextureSettings_AssetSelection($nodeName+".package");
+}
+
+global proc int deleteSubstanceObjects(string $objects[], string $types[]) {
+    int $numDeletedObjects = 0;
+
+    if (size($objects) > 0) {
+        $objects = stringArrayRemoveDuplicates($objects);   // yep, we may get one|two|three instances of the same objects!
+
+	    for ($object in $objects) {
+            string $objectType = `objectType $object`;
+
+            if (stringArrayContains($objectType, $types)) {
+                delete $object;
+                $numDeletedObjects += 1;
+            }
+	    }
+    }
+
+    return $numDeletedObjects;
+}
+
+// WIP: Reset the connected objects...
+global proc int resetScene(string $nodeName) {
+
+    // Note: '$nodeName' is the name of the actual substance object.
+    show("----------------------- Reset scene for " + $nodeName + "... ---------------------------");
+
+    string $objects[];
+    string $types[];
+    string $textureObject;
+    string $materialObject = $nodeName + "_Material";
+    int $numDeletedObjects = 0;
+
+    // Make sure we have the mandatory objects ('substance' & 'place2dTexture' types):
+    if (`objExists $nodeName` == false) {
+        show("No substance object for " + $nodeName);
+        return -1;
+    }
+
+    $objects = `listConnections -type place2dTexture $nodeName`;
+    if (!size($objects)) {
+        show("No place2dTexture object for " + $nodeName);
+        return -1;
+    }
+    $textureObject = $objects[0];
+
+    // Delete the objects of interest:
+    $objects = `listConnections $textureObject`;
+    if (size($objects) > 0) {
+        $types[0] = "substanceOutput";
+        $types[1] = "file";
+        $numDeletedObjects += deleteSubstanceObjects($objects, $types);
+    }
+
+    if (`objExists $materialObject` == false) {
+        return $numDeletedObjects;
+    }
+
+    $objects = `listConnections $materialObject`;
+    if (size($objects) > 0) {
+        $types[0] = "bump2d";
+        $types[1] = "shadingEngine";
+        $numDeletedObjects += deleteSubstanceObjects($objects, $types);
+    }
+
+    // Finally:
+    delete $materialObject;
+    $numDeletedObjects += 1;
+
+    show("        Deleted " + $numDeletedObjects + " objects.");
+
+    return $numDeletedObjects;
+}
+
+global proc BrowsePackagesButtonPressed(string $nodeName) {
+    milestone("CALLBACK:    S e l e c t    a    s u b s t a n c e . . .");
+	show("BrowsePackagesButtonPressed( " + $nodeName + " )...");
+
+	global int $sbs_PackageHasJustBeenChanged;
+
+	string $kSubstanceArchives = getPluginResource("SubstancePlugin", "kAESubstanceArchives");
+	string $kSubstanceFiles = getPluginResource("SubstancePlugin", "kAESubstanceFiles");
+	string $kChooseSubstance = getPluginResource("SubstancePlugin", "kAEChooseSubstance");
+
+	// Single filter with a description.
+	string $multipleFilters = $kSubstanceArchives + "(*.sbsar);;" + $kSubstanceFiles +"(*.xml);;";
+
+	string $defaultDir = `workspace -q -fullName` + "/sourceimages/";
+
+	string $result[] = `fileDialog2 -caption $kChooseSubstance -fm 1 -fileFilter $multipleFilters -selectFileFilter ($kSubstanceArchives+"(*.sbsar)") -dialogStyle 2`; // -startingDirectory $defaultDir`;
+	if (!size($result)) {
+		return; //user has cancelled
+	}
+
+    // Clean up the "scene" (only keep the texture and substance objects)
+    int $numDeletedObjects = resetScene($nodeName);
+    if ($numDeletedObjects < 0) {
+        return;
+    }
+
+	string $packageFilename = `getAttr ($nodeName+".package")`;
+
+	$sbs_PackageHasJustBeenChanged = 1; //update our global variable
+
+	if (cpp_IsSubstanceRelocalized($result[0], $packageFilename)) {
+		Relocalize($nodeName, $result[0]);
+	} else {
+		sbsRemoveAllDynamicAttributes($nodeName);
+		//Set package filename in attribute (it's a fullpath name)
+		string $filename = $result[0];
+		setAttr ($nodeName+".package") -type "string" ($filename); //Set the filename, it may be a relative or absolute (including path) filename
+
+		updateGraphItems($nodeName);
+	}
+
+    show("CALLBACK Done.");
+}
+
+//Return values are :
+// 0 if it's not present
+// 1 it is connected upstream to the substance node
+// 2 it is connected upstream to the substance node and downstream to something else
+global proc int getSubstanceOutputNodeState(string $nodeName, string $channelName) {
+	show("getSubstanceOutputNodeState( " + $nodeName + ", " + $channelName + " )...");
+
+	string $prefix					= "outputdyn_";
+	string $postfixChannelColor		= "_Color";
+
+	string $substanceAttributeName	= $prefix + $channelName + $postfixChannelColor;
+
+	if ( `attributeQuery -exists -node $nodeName $substanceAttributeName` == false) {
+		return 0;
+	}
+
+	string $connectedNodes[] = `listConnections -type "substanceOutput" ($nodeName+"."+$substanceAttributeName)`;
+
+	if (!size($connectedNodes)) {
+		return 0;
+	}
+
+	//Use first node if several are present.
+	string $outputNodeName = $connectedNodes[0];
+	string $connectedNodesFromOutput[];
+	int $connections = 0;
+	for( $out in {"Color",
+				"Image",	// autobaking connects outImage
+				"ColorR",	// outputs node have only red connected
+				"Alpha"	// or alpha
+			}){
+		$connectedNodesFromOutput = `listConnections ($outputNodeName+".out"+$out)`;
+		$connections = size($connectedNodesFromOutput);
+		if ($connections)
+			break;
+	}
+
+	if (!$connections)
+		return 1;
+
+	string $connectedNodeFromOutput = "";
+	for ($connectedNodeFromOutput in $connectedNodesFromOutput) {
+		if (isConnectedDownstreamToSurfaceShaderOrShadingGroup($connectedNodeFromOutput)) {
+			return 2;
+		}
+	}
+
+	return 1; //Not connected to a surface/shader
+}
+
+global proc int isConnectedDownstreamToSurfaceShaderOrShadingGroup(string $node) {
+	if (sbs_IsMaterialNode($node) || sbs_IsShadingGroupNode($node)) {
+		return 1;
+	}
+
+	show("isConnectedDownstreamToSurfaceShaderOrShadingGroup( " + $node + " )...");
+
+	string $connectedNodes[] = `listConnections -source false -destination true $node`;
+
+	string $connectedNode ="";
+	for ($connectedNode in $connectedNodes) {
+		if (isConnectedDownstreamToSurfaceShaderOrShadingGroup($connectedNode)) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+global proc string getSubstanceOutputNodeConnected(string $nodeName, string $channelName) {
+	string $prefix = "outputdyn_";
+	string $postfixChannelColor = "_Color";
+
+	string $substanceAttributeName = $prefix + $channelName + $postfixChannelColor;
+
+	if ( `attributeQuery -exists -node $nodeName $substanceAttributeName` == false) {
+		return "";
+	}
+
+	show("getSubstanceOutputNodeConnected( " + $nodeName + ", " + $channelName + " )...");
+
+	string $connectedNodes[] = `listConnections -type "substanceOutput" ($nodeName+"."+$substanceAttributeName)`;
+	if (size($connectedNodes)) {
+		return $connectedNodes[0];
+	}
+
+	return "";
+}
+
+global proc createOrGetSubstanceOutputNode(string $nodeName, string $channelName) {
+	show("createOrGetSubstanceOutputNode( " + $nodeName + ", " + $channelName + " )...");
+
+	// Only create the node if it doesn't currently exist
+	string $outputNodeName = getSubstanceOutputNodeConnected($nodeName, $channelName);
+	if ($outputNodeName == "") {
+		$outputNodeName = `createRenderNodeCB -as2DTexture "" substanceOutput ""`;
+		rename $outputNodeName ($channelName+"_"+$nodeName);
+		$outputNodeName = ($channelName+"_"+$nodeName); //update our variable to reflect the new name
+	}
+
+	sbsConnectShadingNetwork($nodeName, $outputNodeName, $channelName);
+
+	//Keep our node selected
+	select $nodeName;
+}
+
+global proc int sbs_IsMaterialNode(string $node) {
+	if ($node=="swatchShadingGroup") {
+		return 0;
+	}
+
+	string $classes[] = getClassification( `nodeType $node` );
+	string $class = "";
+	for ($class in $classes) {
+		if (match("shader/surface", $class) != "") {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+global proc int sbs_IsShadingGroupNode(string $node) {
+	if ($node=="swatchShadingGroup") {
+		return 1;
+	}
+
+	string $classes[] = getClassification( `nodeType $node` );
+	string $class = "";
+	for ($class in $classes) {
+		if (match("shadingEngine", $class) != "") {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+global proc string sbs_GetMaterialFromSubstanceNodeOrCreateIt(string $nodeName, int $PBRWorkflow) {
+	show("sbs_GetMaterialFromSubstanceNodeOrCreateIt( " + $nodeName + ", " + $PBRWorkflow + " )...");
+
+	string $material = "";
+	string $connectedNodes[] = `listConnections ($nodeName+".outColor")`;
+	int $numNodes = size($connectedNodes);
+
+	if ($numNodes) {
+		int $i;
+		for ($i=0; $i<$numNodes; $i++) {
+			if ($connectedNodes[$i]!="swatchShadingGroup") {
+				$material = $connectedNodes[$i];
+				return $material;
+			}
+		}
+	}
+
+	//Get all channels and try to get a material connected to an output node
+	string $package = `getAttr ($nodeName+".package")`;
+	string $graph = `getAttr ($nodeName+".graph")`;
+	if (size($package) && size($graph)) {
+	    string $prefix = "outputdyn_";
+	    string $postfix = "_Color";
+
+	    string $channelsNames[] = cpp_GetChannelsNamesFromSubstanceNode($nodeName);
+	    int $numChannels = size($channelsNames);
+	    int $i;
+	    for ($i=0; $i<$numChannels; $i++) {
+		string $channelName = $channelsNames[$i];
+		string $outputNodeConnected = getSubstanceOutputNodeConnected($nodeName, $channelName);
+
+		if ($outputNodeConnected != "") {
+			string $connectedNodes[] = `listConnections $outputNodeConnected`;
+			if (size($connectedNodes)) {
+				string $matNode = "";
+				for ($matNode in $connectedNodes) {
+					if (sbs_IsMaterialNode($matNode)) {
+						return $matNode;
+					}
+				}
+			} else {
+				//If shader is bump or normal, go one level to get material and ignore bump2d node
+				$connectedNodes = `listConnections -type "bump2d" $outputNodeConnected`;
+				if (size($connectedNodes)) {
+					//Use first bump2d node found
+					string $connectedNodesBump2D[] = `listConnections -type "material" $connectedNodes[0]`;
+					int $numNodes = size($connectedNodesBump2D);
+					if ($numNodes) {
+						int $i;
+						for ($i=0; $i<$numNodes; $i++) {
+							if ($connectedNodesBump2D[$i]!="swatchShadingGroup") {
+								return $connectedNodesBump2D[$i];
+							}
+						}
+					}
+				}
+				$connectedNodes = `listConnections -type "reverse" $outputNodeConnected`;
+
+				if (size($connectedNodes)) {
+					//Use first reverse node found
+					string $connectedNodesReverse[] = `listConnections -type "material" $connectedNodes[0]`;
+					int $numNodes = size($connectedNodesReverse);
+					if ($numNodes) {
+						int $i;
+						for ($i=0; $i<$numNodes; $i++) {
+							if ($connectedNodesReverse[$i]!="swatchShadingGroup") {
+								return $connectedNodesReverse[$i];
+							}
+						}
+					}
+				}
+			}
+		}
+		}
+	}
+
+	//Last try with its name...
+	$material					= ($nodeName + "_Material");
+	string $materialNodeName[]	= `ls $material`;
+
+	//If not found, we create it
+	if (!size($materialNodeName)) {
+	    if($PBRWorkflow == 1)
+	    {
+		python("from SubstanceHelpers import sbsCreateShader");
+		python("sbsCreateShader(\""+$nodeName+"\")");
+	    }
+	    else
+	    {
+		//Doesn't exist yet so create material and shading group
+		$material = `shadingNode -asShader phongE`;
+		string $shadingGroup = `sets -renderable true -noSurfaceShader true -empty -name phongE2SG`;
+		// connect material2shadingG //
+		conn("02: connectAttr -f " + $material + ".outColor " + $shadingGroup + ".surfaceShader");
+		connectAttr -f ($material + ".outColor") ($shadingGroup + ".surfaceShader");
+
+		select -r $material;
+		rename $material ($nodeName + "_Material");
+		$material = ($nodeName + "_Material");
+		hyperShade -sn $material;
+	    }
+	}
+
+	sbsDebugPrint("sbs_GetMaterialFromSubstanceNodeOrCreateIt returned : "+ $material);
+	return $material;
+}
+
+global proc string sbs_GetShadingGroupFromMaterial(string $material) {
+	show("### sbs_GetShadingGroupFromMaterial( " + $material + " )...");
+    python("from SubstanceHelpers import sbsGetShadingGroupFromMaterial");
+    return python("sbsGetShadingGroupFromMaterial(\"" + $material + "\")");
+}
+
+global proc sbs_RearrangeHypershadeGraph() {
+	show("sbs_RearrangeHypershadeGraph()...");
+
+	string $panel = `getPanel -withFocus`;
+	if ($panel == "") { return; }
+
+	string $type = `getPanel -typeOf $panel`;
+	if ($type == "scriptedPanel") {
+		string $scriptedType = `scriptedPanel -query -type $panel`;
+		if ($scriptedType == "hyperShadePanel") {
+			hyperShadePanelGraphCommand($panel, "rearrangeGraph");
+		}
+		if ($scriptedType == "nodeEditorPanel") {
+			nodeEditor -e -frameAll -layout ($panel + "NodeEditorEd");
+			nodeEditor -e -layout ($panel + "NodeEditorEd");
+		}
+    }
+}
+
+global proc sbs_ConnectOutputNode(string $channelName, string $nodeName, string $outputNodeName,
+				  string $material, string $shadingGroup,
+				  int $sbs_AutomaticBakeCheck)
+{
+	show("### sbs_ConnectOutputNode( " + $channelName + ", " + $nodeName + ", " + $outputNodeName + " )...");
+
+    python("from SubstanceHelpers import sbsConnectOutputNode");
+    python("sbsConnectOutputNode(\""+$channelName+"\", \"" + $nodeName + "\", \"" + $outputNodeName + "\", \"" +
+	   $material + "\", \"" + $shadingGroup + "\", " +
+	   $sbs_AutomaticBakeCheck + ")");
+}
+
+global proc ChannelTreeViewButtonClickCommand(string $nodeName, string $itemClicked, int $buttonState) {
+	show("### ChannelTreeViewButtonClickCommand( " + $nodeName + ", " + $itemClicked + ", " + $buttonState + " )...");
+
+    python("from SubstanceHelpers import sbsChannelTreeViewButtonClickCommand");
+    python("sbsChannelTreeViewButtonClickCommand(\"" + $nodeName + "\", \"" + $itemClicked + "\", " +
+	   $buttonState + ")");
+}
+
+//Called on user rename of items in tree view, no matter which layer it is in.
+//Return the new identifier for the item in the tree view, or an empty string
+//in the item should not be renamed
+global proc string precompExportEditorItemOnRename(string $oldName, string $newName) {
+    return "";
+}
+
+global proc CreateGUI_EngineNormalFormat(string $attributeName) {
+	show("### CreateGUI_EngineNormalFormat( " + $attributeName + " )...");
+
+	setUITemplate -pst attributeEditorTemplate;
+
+	string $kNormalMapFormat = getPluginResource("SubstancePlugin", "kAENormalMapFormat");
+	string $kNMF0 = getPluginResource("SubstancePlugin", "kAENM0");
+	string $kNMF1 = getPluginResource("SubstancePlugin", "kAENM1");
+	string $kNMF2 = getPluginResource("SubstancePlugin", "kAENM2");
+	string $kNMF3 = getPluginResource("SubstancePlugin", "kAENM3");
+	string $kNMF4 = getPluginResource("SubstancePlugin", "kAENM4");
+	string $kNMF5 = getPluginResource("SubstancePlugin", "kAENM5");
+	string $kNMF6 = getPluginResource("SubstancePlugin", "kAENM6");
+	string $kNMF7 = getPluginResource("SubstancePlugin", "kAENM7");
+
+	attrEnumOptionMenuGrp
+	    -l $kNormalMapFormat
+	    -at $attributeName
+	    -ei 0  $kNMF0
+	    -ei 1  $kNMF1
+	    -ei 2  $kNMF2
+	    -ei 3  $kNMF3
+	    -ei 4  $kNMF4
+	    -ei 5  $kNMF5
+	    -ei 6  $kNMF6
+	    -ei 7  $kNMF7
+	    -enable 1
+	    attrEnumOptionGroupNormalFormat;
+	setParent ..;
+	setUITemplate -ppt;
+
+	UpdateGUI_EngineNormalFormat($attributeName);
+}
+
+global proc UpdateGUI_EngineNormalFormat(string $attributeName) {
+	show("### UpdateGUI_EngineNormalFormat( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	int $enabled = isNormalFormatPresent($nodeName);
+	attrEnumOptionMenuGrp -e -at $attributeName -enable $enabled attrEnumOptionGroupNormalFormat;
+}
+
+global proc CreateGUI_TextureSettings_AssetSelection(string $attributeName) {
+	show("CreateGUI_TextureSettings_AssetSelection( " + $attributeName + " )...");
+
+	global int $sbs_PreventSubstanceOutColorFromBeingConnectedDirectly;
+	string $kEditTtip = getPluginResource("SubstancePlugin", "kAEEditTtip");
+
+	setUITemplate -pst attributeEditorTemplate;
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+
+	string $kSubstanceFile = getPluginResource("SubstancePlugin", "kAESubstanceFile");
+	string $kEdit = getPluginResource("SubstancePlugin", "kAEEdit");
+	string $kReload = getPluginResource("SubstancePlugin", "kAEReload");
+	string $kPreset = getPluginResource("SubstancePlugin", "kAEPreset");
+	string $kSubstanceGraph = getPluginResource("SubstancePlugin", "kAESubstanceGraph");
+
+	rowLayout -numberOfColumns 3 textureNameLayout;
+		text -label $kSubstanceFile;
+		textField -text "" textFieldSubstanceFile;
+		symbolButton -image "navButtonBrowse.png" substanceFileBrowser;
+
+	setParent ..;
+
+
+	rowColumnLayout -numberOfRows 1 localSizeLayout;
+		optionMenuGrp -label $kSubstanceGraph -width 270 optionMenuGrpGraph;
+		button -label $kEdit -width 70 -enable true -annotation $kEditTtip substanceEdit;
+
+	setParent ..;
+
+	rowLayout -numberOfColumns 1 Reloading;
+
+		button -label $kReload -width 150 -enable true reloadButton;
+
+	setParent ..;
+
+	string $layout = `formLayout -h 120 -w 100`;
+
+	//Set predefined options in combo box
+	treeView -numberOfButtons 1
+	-abr false
+	-reverseTreeOrder false
+	-editLabelCommand "precompExportEditorItemOnRename"
+	-pressCommand 1 ("ChannelTreeViewButtonClickCommand "+$nodeName)
+	treeControlChannel;
+    setParent ..;//$layout
+	formLayout -e
+		-attachForm  treeControlChannel "top" 0
+		-attachForm  treeControlChannel "left" 0
+		-attachForm  treeControlChannel "bottom" 0
+		-attachForm  treeControlChannel "right" 0
+	$layout;
+
+	setUITemplate -ppt;
+
+	UpdateGUI_TextureSettings_AssetSelection($attributeName);
+
+	$nodeName = `match "[^.]*" $attributeName`;
+	select $nodeName;
+}
+
+global proc commandGraphOptionGroup(string $nodeName) {
+	show("commandGraphOptionGroup( " + $nodeName + " )...");
+
+	global int $sbs_PackageHasJustBeenChanged;
+	string $selectedGraph	= `optionMenuGrp -q -v optionMenuGrpGraph`;
+	string $currentGraph	= `getAttr ($nodeName+".graph")`;
+
+	if ($currentGraph != $selectedGraph) {
+		if ($currentGraph != "" && !$sbs_PackageHasJustBeenChanged) {
+			string $kConfirm = getPluginResource("SubstancePlugin", "kAEConfirm");
+			string $kMsgReload = getPluginResource("SubstancePlugin", "kAEMsgReloadGraph");
+			string $kYes = getPluginResource("SubstancePlugin", "kAEYes");
+			string $kNo = getPluginResource("SubstancePlugin", "kAENo");
+
+			string $answer = `confirmDialog -title $kConfirm -message $kMsgReload
+				-button $kYes -button $kNo -defaultButton $kYes
+				-cancelButton $kNo -dismissString $kNo`;
+			if ($answer == $kYes) {
+				setAttr ($nodeName+".graph") -type "string" ($selectedGraph);
+                show("Changed graph.");
+				updateUIWithCurrentSubstanceFile($nodeName);
+				RecreateShaderNetwork($nodeName);
+				$sbs_PackageHasJustBeenChanged = 0;//reset our global variable
+			} else {
+				//Reset previous seclection in menu
+				optionMenuGrp -e -v $currentGraph  optionMenuGrpGraph;
+			}
+		} else {
+			$sbs_PackageHasJustBeenChanged = 0;//reset our global variable
+			setAttr ($nodeName+".graph") -type "string" ($selectedGraph);
+            show("Selected asset via browser.");
+			updateUIWithCurrentSubstanceFile($nodeName);
+		}
+	} else {
+		sbsDebugPrint("sbs_PackageHasJustBeenChanged = "+$sbs_PackageHasJustBeenChanged);
+		//Graphs are the same, but packages may have been changed
+		if ($sbs_PackageHasJustBeenChanged) {
+			sbsDebugPrint("sbs_PackageHasJustBeenChanged = 1");
+			$sbs_PackageHasJustBeenChanged = 0;//reset our global variable
+			setAttr ($nodeName+".graph") -type "string" ($selectedGraph);
+            show("???????????????????????????????");   // When do we get here?
+			updateUIWithCurrentSubstanceFile($nodeName);
+		} else {
+			sbsDebugPrint("sbs_PackageHasJustBeenChanged = 0");
+		}
+	}
+}
+
+global proc updateGraphItems(string $nodeName) {
+	show("updateGraphItems( " + $nodeName + " )...");
+
+	sbsDebugPrint("updateGraphItems with nodeName = "+$nodeName);
+	//Get all graphs names
+	string $menuItems[] = `optionMenuGrp -q -ill optionMenuGrpGraph`;
+
+	int $numMenuItems = size($menuItems);
+	//Erase all of them
+	int $i=0;
+	for (; $i<$numMenuItems; $i++) {
+		deleteUI -mi $menuItems[$i];
+	}
+
+	string $graphNames[]	= cpp_GetGraphsNamesFromSubstanceNode($nodeName);
+	int $numGraphs			= size($graphNames);
+	for ($i=0;$i<$numGraphs;$i++) {
+		menuItem -parent ("optionMenuGrpGraph|OptionMenu") -label ($graphNames[$i]);
+	}
+
+	sbsDebugPrint("num graphs = "+$numGraphs);
+
+	//Select the suitable graph
+	if ($numGraphs > 0) {
+		string $graphName = `getAttr ($nodeName+".graph")`;
+		sbsDebugPrint("graphname = "+$graphName);
+		if (size($graphName)) {
+			int $numMenuItems	= `optionMenuGrp -q -ni optionMenuGrpGraph`;
+			sbsDebugPrint("numMenuItems = "+$numMenuItems);
+			string $menuItems[] = `optionMenuGrp -q -ill optionMenuGrpGraph`;
+			for ($i = 0; $i < $numMenuItems; $i++) {
+				string $label = `menuItem -q -label $menuItems[$i]`;
+				sbsDebugPrint("label = "+$label);
+				if ( $label == $graphName ) {
+					optionMenuGrp -e -v $graphName optionMenuGrpGraph;
+					commandGraphOptionGroup($nodeName);
+					return;
+				}
+			}
+
+			if ($numMenuItems) {
+				//We didn't found it so select the first
+				optionMenuGrp -e -sl 1 optionMenuGrpGraph;
+				commandGraphOptionGroup($nodeName);
+			}
+		} else {
+			int $numMenuItems	= `optionMenuGrp -q -ni optionMenuGrpGraph`;
+			if ($numMenuItems) {
+				//select the first
+				optionMenuGrp -e -sl 1 optionMenuGrpGraph;
+				commandGraphOptionGroup($nodeName);
+			}
+		}
+	}
+}
+
+global proc reloadPackage(string $nodeName) {
+	show("### reloadPackage( " + $nodeName + " )...");
+
+	updateUIWithCurrentSubstanceFile($nodeName); //Update UI first for tweaks to be resetted
+	setAttr ($nodeName+".reload") 1.0;
+}
+
+global proc string getToolTipFromChannel(string $channel)
+{
+	show("getToolTipFromChannel( " + $channel + " )...");
+
+	string $ttip = "This button creates a "+$channel+" output node to the ";
+	if ($channel == "opacity")
+	{
+		$ttip += "transparency";
+	}
+	else if ($channel == "diffuse")
+	{
+		$ttip += "color";
+	}
+	else if ($channel == "emissive")
+	{
+		$ttip += "incandescence";
+	}
+	else if ($channel == "specular")
+	{
+		$ttip += "specularColor";
+	}
+	else if ($channel == "normal")
+	{
+		$ttip += "normalCamera";
+	}
+	else if ($channel == "bump")
+	{
+		$ttip += "normalCamera";
+	}
+	else if ($channel == "displacement")
+	{
+		$ttip += "displacementShader";
+	}
+	else if ($channel == "height")
+	{
+		$ttip += "displacementShader";
+	}
+	else if ($channel == "gloss")
+	{
+		$ttip += "roughness";
+	}
+	else if ($channel == "glossiness")
+	{
+		$ttip += "roughness";
+	}
+	else
+	{
+		$ttip += "some";
+	}
+
+	$ttip += "channel of a shading network.";
+	return $ttip;
+}
+
+global proc UpdateGUI_TextureSettings_AssetSelection(string $attributeName) {
+//This can't be undone(Gordon)
+flushUndo;
+    milestone("A c t i v a t e    s u b s t a n c e . . . (by user or internally)");
+	show("UpdateGUI_TextureSettings_AssetSelection( " + $attributeName + " )...");
+
+	global string $g_OutputConnectedUpAndDownStreamImage;
+	global string $g_OutputConnectedUpStreamImage;
+	global string $g_OutputNotConnectedImage;
+	global int $sbs_PreventSubstanceOutColorFromBeingConnectedDirectly;
+
+	//Update the UI with this node's attributes values
+	string $nodeName = `match "[^.]*" $attributeName`;
+
+    global string $g_NodeName;
+    $g_NodeName = $nodeName;
+
+	string $package = `getAttr ($nodeName+".package")`;
+    string $graph = `getAttr ($nodeName+".graph")`;
+
+	textField -e -text $package -backgroundColor 1.0 0.0 0.0 textFieldSubstanceFile;
+
+	if ($sbs_PreventSubstanceOutColorFromBeingConnectedDirectly) {
+		int $scriptJobAdded = `getAttr ($nodeName+".scriptJobAdded")`;
+		if (! $scriptJobAdded) {
+			setAttr ($nodeName+".scriptJobAdded") 1;
+		}
+	}
+
+	sbsDebugPrint("calling UpdateGUI_TextureSettings_AssetSelection with nodename = "+$nodeName);
+
+	button -e  -c ("reloadPackage "+$nodeName) reloadButton;
+
+	//Update node name in UI callback and reset caption
+	textField -e -cc ( "SubstanceFileEntered(\"" + $nodeName + "\")" ) textFieldSubstanceFile;
+	symbolButton -e -c ( "BrowsePackagesButtonPressed(\"" + $nodeName + "\")" ) substanceFileBrowser;
+
+	//Edit substance
+	button -e -c ("cpp_EditSubstance \""+$package+"\"") substanceEdit;
+
+	//Update graphs drop down list
+	optionMenuGrp -e -cc ("commandGraphOptionGroup "+$nodeName) optionMenuGrpGraph;
+	updateGraphItems($nodeName);
+
+    // Update cache directory
+    int $cacheStatus = `getAttr ($nodeName + ".cacheStatus")`;
+    global int $g_outputCacheTask;
+    $g_outputCacheTask = $cacheStatus;
+    global string $g_outputCacheRadioButtonControl[];
+    if (size($g_outputCacheRadioButtonControl) > $cacheStatus) {
+        if (`radioButton -exists $g_outputCacheRadioButtonControl[$cacheStatus]`) {
+            radioButton -e -select $g_outputCacheRadioButtonControl[$cacheStatus];
+        }
+    }
+
+	//remove all items from list
+	treeView -e -ra -pressCommand 1 ("ChannelTreeViewButtonClickCommand "+$nodeName) treeControlChannel; //Remove all items and update nodeName in callback
+
+	textField -e -text "" -backgroundColor 0.16 0.16 0.16 -enableBackground false textFieldSubstanceFile;
+
+	sbsDebugPrint("package attr is = "+$package);
+    sbsDebugPrint("graph attr is = "+$graph);
+
+    if ( size($package) && size($graph) )
+    {
+		string $prefix = "outputdyn_";
+		string $channelsNames[] = cpp_GetChannelsNamesFromSubstanceNode($nodeName);
+		int $numChannels = size($channelsNames);
+		int $i;
+		for ($i=0;$i<$numChannels;$i++)
+		{
+			string $channelName = $channelsNames[$i];
+			treeView -e -addItem $channelName "" treeControlChannel;
+
+			string $ttip = getToolTipFromChannel($channelName);
+			treeView -e -buttonTooltip $channelName 1 $ttip treeControlChannel;
+
+			int $state = getSubstanceOutputNodeState($nodeName, $channelName);
+			switch( $state )
+			{
+				case 1:
+					treeView -e -image ($channelName) 1 $g_OutputConnectedUpStreamImage treeControlChannel;
+					break;
+				case 2:
+					treeView -e -image ($channelName) 1 $g_OutputConnectedUpAndDownStreamImage treeControlChannel;
+					break;
+				case 0:
+				default:
+					treeView -e -image ($channelName) 1 $g_OutputNotConnectedImage treeControlChannel;
+				break;
+			}
+		}
+
+		//Update button caption
+		textField -e -text ($package) textFieldSubstanceFile;
+    }
+//This can't be undone (Gordon)
+flushUndo;
+}
+
+global proc int sbsGetPowerOfTwo(int $number) {
+	int $power = 0;
+	int $copy = $number;
+	while ($copy != 1) {
+	   $copy = $copy / 2;
+	   $power++;
+	}
+
+	return $power;
+}
+
+global proc int sbsComputePowerOfTwo(int $power) {
+	return `pow 2 $power`;
+}
+
+//Description
+//			This adjusts the movment of Size X and Size Y slider to the values of
+//			power of 2.
+//
+global proc int sbsMakePowerOfTwo(int $sz) {
+	int $prevSize = 0, $nextSize = 1;
+	while ($nextSize < $sz ) {
+	   $prevSize = $nextSize;
+	   $nextSize = $nextSize * 2;
+	}
+
+	int $newSize;
+
+	if (($sz - $prevSize) < ($nextSize - $sz)) {
+		$newSize = $prevSize;
+	} else {
+		$newSize = $nextSize;
+	}
+	return $newSize;
+
+}
+
+global proc int UpdateGUI_EngineSettings_Type(string $attributeName) {
+	show("### UpdateGUI_EngineSettings_Type( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $engineAtt = $nodeName + ".globalEngine";
+
+	attrEnumOptionMenuGrp -e -at $engineAtt engineMenuGrp;
+	int $globalEngine = cpp_GetEngine();
+    int $globalEngineGuiValue = `getAttr $engineAtt`;
+    if( $globalEngine != $globalEngineGuiValue ){
+	setAttr $engineAtt $globalEngine;
+    }
+	return $globalEngine;
+}
+
+global proc CreateGUI_EngineSettings_Type(string $attributeName) {
+	show("### CreateGUI_EngineSettings_Type( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $engineAtt = $nodeName + ".globalEngine";
+
+	setUITemplate -pst attributeEditorTemplate;
+
+	string $kEngine = getPluginResource("SubstancePlugin", "kAEEngine");
+
+	rowLayout -nc 2 -columnWidth2 395 195 engineNameLayout;
+		attrEnumOptionMenuGrp
+			-l $kEngine
+			-at $engineAtt
+			-ei 0  "Software"
+			// disable hardware renderer
+			-ei 1  "Hardware"
+			-enable true
+			-visibleChangeCommand($engineAtt)
+			engineMenuGrp;
+	setParent ..;
+
+	setUITemplate -ppt;
+
+	// retreive state from sbs engine
+	UpdateGUI_EngineSettings_Type($attributeName);
+
+	// warn on engine change
+	scriptJob -attributeChange $engineAtt "onGuiEngineChange()";
+}
+
+global proc onGuiEngineChange(){
+	string $window = `window -title "Warning"
+				 -widthHeight 265 70`;
+	columnLayout;
+	text -label "";
+	text -label "You need to restart Maya in order to apply changes." -align "center";
+	text -label "";
+	button -label "Ok" -width 260 -align "center" -command ("deleteUI -window " + $window);
+	setParent ..;
+	showWindow $window;
+}
+
+global proc UpdateGUI_AutoBaking(string $attributeName) {
+    string $nodeName = `match "[^.]*" $attributeName`;
+    global string $g_NodeName;
+    $nodeName = $g_NodeName;
+    string $formatAtt = $nodeName + ".bakeFormat";
+    string $bakeCheck = $nodeName + ".autoBake";
+    string $AutomaticBakeCheck = $nodeName + ".autoBake";
+
+    int $format = cpp_GetBakeFormat();
+    setAttr $formatAtt $format;
+
+    updateCacheFolderDialog($nodeName);
+}
+
+global proc onOutputCacheButton(int $outputCacheTask, string $attributeName) {
+    global string $g_NodeName;
+    string $nodeName = `match "[^.]*" $attributeName`;
+
+    setAttr ($g_NodeName + ".cacheStatus") $outputCacheTask;
+
+    updateCacheFolderDialog($g_NodeName);
+}
+
+global proc onSelectCacheOutputFolder(string $attributeName) {
+    string $nodeName = `match "[^.]*" $attributeName`;
+    global string $g_NodeName;
+    $nodeName = $g_NodeName;
+
+    // Acquire cache state and folder
+    string $cacheFolder = `getAttr ($nodeName + ".cacheFolder")`;
+
+    print($nodeName + "\n");
+
+    string $result[] = `fileDialog2 -caption "Select custom folder" -fm 2 -dialogStyle 2 -startingDirectory $cacheFolder`;
+    if (size($result)) {
+        $cacheFolder = $result[0];
+        textField -edit -text $cacheFolder cacheFolderTextfieldControl;
+        setAttr -type "string" ($nodeName + ".cacheFolder") $cacheFolder;
+
+        UpdateGUI_AutoBaking($attributeName);
+    }
+}
+
+global proc updateCacheFolderDialog(string $nodeName) {
+    // Acquire cache status and cache folder from node
+    int $cacheStatus = `getAttr ($nodeName + ".cacheStatus")`;
+    string $cacheFolder = `getAttr ($nodeName + ".cacheFolder")`;
+
+    if ($cacheStatus == 1) {
+        // Acquire the current project directory
+        $cacheFolder = `workspace -q -fullName` + "/sourceimages/";
+
+        if (`text -exists cacheFolderTextControl`) {
+            text -edit -visible true cacheFolderTextControl;
+        }
+        textField -edit -visible true
+                        -ed false
+                        -backgroundColor 0.2 0.2 0.2
+                        -text $cacheFolder
+                         cacheFolderTextfieldControl;
+        symbolButton -edit -visible false cacheFolderSymbolButtonControl;
+    }
+    else if ($cacheStatus == 2) {
+        if ($cacheFolder == "") {
+            $cacheFolder = `workspace -q -fullName`;
+        }
+        if (`text -exists cacheFolderTextControl`) {
+            text -edit -visible true cacheFolderTextControl;
+        }
+        textField -edit -visible true
+                        -ed true
+                        -backgroundColor 0.15 0.15 0.15
+                        -text $cacheFolder
+                         cacheFolderTextfieldControl;
+        symbolButton -edit -visible true cacheFolderSymbolButtonControl;
+    }
+    else { // Default to case 0
+        // Hide controls
+        if (`text -exists cacheFolderTextControl`) {
+            text -edit -visible false cacheFolderTextControl;
+        }
+        if (`textField -exists cacheFolderTextfieldControl`) {
+            textField -edit -visible false cacheFolderTextfieldControl;
+        }
+        if (`symbolButton -exists cacheFolderSymbolButtonControl`) {
+            symbolButton -edit -visible false cacheFolderSymbolButtonControl;
+        }
+
+        $cacheFolder = "";
+    }
+
+    // Set the cache folder attribute
+    setAttr -type "string" ($nodeName + ".cacheFolder") $cacheFolder;
+}
+
+global proc CreateGUI_AutoBaking(string $attributeName) {
+    show("### CreateGUI_AutoBaking( " + $attributeName + " )...");
+
+    global int $sbs_Indent;
+    global int $sbs_AutomaticBakeCheck;
+    string $nodeName = `match "[^.]*" $attributeName`;
+    string $formatAtt = $nodeName + ".bakeFormat";
+    string $AutomaticBakeCheck = $nodeName + ".autoBake";
+
+    string $kFormat = getPluginResource("SubstancePlugin", "kAEAutoBakeFormat");
+    string $kAutoBakeConnections = getPluginResource("SubstancePlugin", "kAEAutoBakeConnections");
+    string $kConnectEachAnn = getPluginResource("SubstancePlugin", "kAEConnectEachAnn");
+    string $kBakedBitmapsAnn = getPluginResource("SubstancePlugin", "kAEBakedBitmapsAnn");
+
+    string $kFolder = getPluginResource("SubstancePlugin", "kAECacheOutputFolder");
+    string $kButton1 = getPluginResource("SubstancePlugin", "kAECacheOutputNone");
+    string $kButton2 = getPluginResource("SubstancePlugin", "kAECacheOutputMayaProjectFolder");
+    string $kButton3 = getPluginResource("SubstancePlugin", "kAECacheOutputCustomFolder");
+    string $kButton1Hint = getPluginResource("SubstancePlugin", "kAECacheOutputNoneHint");
+    string $kButton2Hint = getPluginResource("SubstancePlugin", "kAECacheOutputMayaProjectFolderHint");
+    string $kButton3Hint = getPluginResource("SubstancePlugin", "kAECacheOutputCustomFolderHint");
+
+    // ..............................................................................................
+    global int $default_automaticConnections;
+    setAttr $AutomaticBakeCheck $default_automaticConnections;
+
+    global int $default_bakeFormat;
+    setAttr $formatAtt ($default_bakeFormat - 1);  // in prefs: we're 1-based, here it's 0-based (...different gui tool!)
+
+    // ...
+    rowLayout -nc 2 -columnAttach2 "left" "both" -columnOffset2 0 -35 -columnWidth2 195 195 AutoBakingLayout;
+
+		checkBox
+			-l $kAutoBakeConnections
+			-ann $kConnectEachAnn
+	        -v (`getAttr $AutomaticBakeCheck` == 1)
+			-en true
+			-onc ("setAttr " + $AutomaticBakeCheck + " 1")
+			-ofc ("setAttr " + $AutomaticBakeCheck + " 0")
+			guiAutoBakeCheck;
+
+		attrEnumOptionMenuGrp
+			-l $kFormat
+			-ann $kBakedBitmapsAnn
+			-at $formatAtt
+			-ei 0 "jpg"
+			-ei 1 "png"
+			-ei 2 "tif"
+			-ei 3 "tga"
+			-ei 4 "iff"
+			-ei 5 "exr"
+			-enable true
+			attrEnumOptionGroupBakeFormat;
+
+	setParent..;
+
+    // ................................................................................................................
+    // Caching:
+    string $outputCacheRadioCollection;
+    global string $g_outputCacheRadioButtonControl[];
+
+    global int $default_outputCacheTask;   // 0: use TMP dir. (no cache), 1: use project dir, 2: use user folder
+    global string $default_outputCacheFolder;
+
+    global int $g_outputCacheTask;
+    global string $g_outputCacheFolder;
+
+    $g_outputCacheTask = $default_outputCacheTask;
+    $g_outputCacheFolder = $default_outputCacheFolder;
+
+    global string $g_NodeName = "";
+    $g_NodeName = $nodeName;
+
+    rowColumnLayout -numberOfColumns 2 ;
+        // 1st column:
+        text -label "Output cache:" /*-backgroundColor $bc$bc$bc*/ -width 100; 
+
+        // 2nd column:
+        columnLayout -columnAttach "left" 0;
+            $outputCacheRadioCollection = `radioCollection`;
+            $g_outputCacheRadioButtonControl[0] = `radioButton -label $kButton1 -ann $kButton1Hint
+                                                             -onc ( "onOutputCacheButton(" + 0 + ", \"" + $attributeName + "\")" )`;
+            $g_outputCacheRadioButtonControl[1] = `radioButton -label $kButton2 -ann $kButton2Hint
+                                                             -onc ( "onOutputCacheButton(" + 1 + ", \"" + $attributeName + "\")" )`;
+            $g_outputCacheRadioButtonControl[2] = `radioButton -label $kButton3 -ann $kButton3Hint
+                                                             -onc ( "onOutputCacheButton(" + 2 + ", \"" + $attributeName + "\")" )`;
+
+            radioButton -e -select $g_outputCacheRadioButtonControl[ $default_outputCacheTask ];
+        setParent ..;
+    setParent ..;
+
+    rowLayout -height 30
+              -numberOfColumns 3
+	          -columnWidth3 70 250 30
+			  -columnAttach3 "left" "left" "left"
+			  -columnOffset3 00 0 0
+			  -adjustableColumn 2;
+
+	    text -label $kFolder cacheFolderTextControl;
+		textField -text $default_outputCacheFolder cacheFolderTextfieldControl;
+		symbolButton -image "navButtonBrowse.png" -c ( "onSelectCacheOutputFolder(\"" + $attributeName + "\")" ) cacheFolderSymbolButtonControl;
+	setParent ..;
+
+	UpdateGUI_AutoBaking($attributeName);
+}
+
+global proc int UpdateGUI_TextureSettings_Workflow(string $attributeName) {
+	show("UpdateGUI_TextureSettings_Workflow( " + $attributeName + " )...");
+
+	string $workflowAtt = $attributeName;  // stick with the same variable name!!!
+	string $nodeName = `match "[^.]*" $workflowAtt`;
+
+	// We cannot set the default workflow value with the 'attrEnumOptionMenuGrp' tool
+	// (which also creates the corresponding workflow attribute), so we use a flag to
+	// assess when a new node is created in order to set the default workflow value!!!!!
+	// (the existence of the attribute means that the workflow was set)
+	if ( `attributeQuery -exists -node $nodeName "workflowFlag" ` == false) {
+		addAttr -hidden true -at "long" -ln "workflowFlag" $nodeName;
+
+		global int $default_workflow;
+		setAttr $workflowAtt $default_workflow;
+	}
+
+    python("from SubstanceHelpers import UpdateGUI_TextureSettings_Workflow");
+    return python("UpdateGUI_TextureSettings_Workflow( \""+$workflowAtt+" \")");
+}
+
+
+global proc CreateGUI_TextureSettings_Workflow(string $attributeName) {
+	show("CreateGUI_TextureSettings_Workflow( " + $attributeName + " )...");
+
+    global string $workflowName[];
+
+    string $nodeName = `match "[^.]*" $attributeName`;
+    string $workflowAtt = $nodeName + ".workflow";
+
+    global int $default_workflow;
+    setAttr $workflowAtt $default_workflow;
+
+    setUITemplate -pst attributeEditorTemplate;
+
+    string $kWorkflow = getPluginResource("SubstancePlugin", "kAEWorkflow");
+
+    rowLayout -nc 2 -columnWidth2 395 195 workflowNameLayout;
+    attrEnumOptionMenuGrp
+	-l $kWorkflow
+	-at $workflowAtt
+	-ei 0  "Classic"
+	-ei 1  "StingrayPBS"
+	-ei 2  "Custom"
+	-enable true
+	-visibleChangeCommand($workflowAtt)
+	workflowMenuGrp;
+    setParent ..;
+
+    setUITemplate -ppt;
+
+    // retreive state from sbs workflow
+    UpdateGUI_TextureSettings_Workflow($attributeName);
+}
+
+global proc UpdateGUI_EngineSettings_Texture(string $attributeName) {
+	show("### UpdateGUI_EngineSettings_Texture( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $widthAtt = $nodeName + ".globalTextureWidth";
+	string $heightAtt = $nodeName + ".globalTextureHeight";
+	string $editionAtt = $nodeName + ".editionModeScale";
+
+	attrEnumOptionMenuGrp -e -at $widthAtt attrEnumOptionGroupGlobalWidth;
+	int $globalTextureWidth = cpp_GetGlobalTextureWidth() - 5;
+	setAttr $widthAtt $globalTextureWidth;
+
+	attrEnumOptionMenuGrp -e -at $heightAtt attrEnumOptionGroupGlobalHeight;
+	int $globalTextureHeight = cpp_GetGlobalTextureHeight() - 5;
+	setAttr $heightAtt $globalTextureHeight;
+
+	attrEnumOptionMenuGrp -e -at $editionAtt attrEnumOptionGroupEditionScale;
+	int $editionScale = cpp_GetEditionModeScale();
+	setAttr $editionAtt $editionScale;
+}
+
+global proc CreateGUI_EngineSettings_Texture(string $attributeName) {
+	show("### CreateGUI_EngineSettings_Texture( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $widthAtt = $nodeName + ".globalTextureWidth";
+	string $heightAtt = $nodeName + ".globalTextureHeight";
+	string $editionAtt = $nodeName + ".editionModeScale";
+
+	string $kGlobalWidth = getPluginResource("SubstancePlugin", "kAEGlobalWidth");
+	string $kGlobalHeight = getPluginResource("SubstancePlugin", "kAEGlobalHeight");
+	string $kGlobalScale = getPluginResource("SubstancePlugin", "kAEGlobalScale");
+
+    global int $default_globalTextureWidth;
+    global int $default_globalTextureHeight;
+
+	setUITemplate -pst attributeEditorTemplate;
+
+    int $engine = cpp_GetEngine();   // 0: software, 1: hardware
+    if($engine){
+        // hardware:
+		attrEnumOptionMenuGrp
+				-l $kGlobalWidth
+				-at $widthAtt
+				-ei 0  "32"
+				-ei 1  "64"
+				-ei 2  "128"
+				-ei 3  "256"
+				-ei 4  "512"
+				-ei 5  "1024"
+				-ei 6  "2048"
+				-ei 7  "4096"
+				-enable true
+				attrEnumOptionGroupGlobalWidth;
+
+		attrEnumOptionMenuGrp
+				-l $kGlobalHeight
+				-at $heightAtt
+				-ei 0  "32"
+				-ei 1  "64"
+				-ei 2  "128"
+				-ei 3  "256"
+				-ei 4  "512"
+				-ei 5  "1024"
+				-ei 6  "2048"
+				-ei 7  "4096"
+				-enable true
+				attrEnumOptionGroupGlobalHeight;
+    }
+    else {
+		attrEnumOptionMenuGrp
+				-l $kGlobalWidth
+				-at $widthAtt
+				-ei 0  "32"
+				-ei 1  "64"
+				-ei 2  "128"
+				-ei 3  "256"
+				-ei 4  "512"
+				-ei 5  "1024"
+				-ei 6  "2048"
+				-ei 7  "4096"
+				-enable true
+				attrEnumOptionGroupGlobalWidth;
+
+		attrEnumOptionMenuGrp
+				-l $kGlobalHeight
+				-at $heightAtt
+				-ei 0  "32"
+				-ei 1  "64"
+				-ei 2  "128"
+				-ei 3  "256"
+				-ei 4  "512"
+				-ei 5  "1024"
+				-ei 6  "2048"
+				-ei 7  "4096"
+				-enable true
+				attrEnumOptionGroupGlobalHeight;
+    }
+
+    // ................................................................
+    // Not displayed in dialog!:
+
+    attrEnumOptionMenuGrp
+	-l $kGlobalScale
+	-at $editionAtt
+	-ei 0  "x1"
+	-ei 1  "1/2"
+	-ei 2  "1/4"
+	-ei 3  "1/8"
+	-enable true
+	-visible false
+	attrEnumOptionGroupEditionScale;
+
+    setUITemplate -ppt;
+
+    UpdateGUI_EngineSettings_Texture($attributeName);
+}
+
+global proc UpdateGUI_TextureSettings_AssetDimensions(string $attributeName) {
+	show("UpdateGUI_TextureSettings_AssetDimensions( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $absoluteWidthAtt = $nodeName + ".absoluteTextureWidth";
+	string $absoluteHeightAtt = $nodeName + ".absoluteTextureHeight";
+	string $widthAtt = $nodeName + ".textureWidth";
+	string $heightAtt = $nodeName + ".textureHeight";
+	string $absoluteAtt = $nodeName + ".textureSizeAbsolute";
+	string $lockARAtt = $nodeName + ".textureLockAspectRatio";
+	int $bAbsolute = true;
+	int $bLockAR = `getAttr ($lockARAtt)`;
+	setAttr ($absoluteAtt) $bAbsolute;
+
+    attrEnumOptionMenuGrp
+		-e -at $absoluteWidthAtt
+		-enable ($bAbsolute)
+		attrEnumOptionGroupLocalAbsoluteWidth;
+
+	attrEnumOptionMenuGrp
+		-e -at $absoluteHeightAtt
+		-enable ($bAbsolute && !$bLockAR)
+		attrEnumOptionGroupLocalAbsoluteHeight;
+
+	checkBoxGrp
+		-e
+		-value1 $bLockAR
+		guiLocalTextureLockARCheck;
+
+	checkBoxGrp
+		-e
+		-changeCommand ( "guiLocalTextureLockARChanged(\"" + $nodeName + "\")" )
+		guiLocalTextureLockARCheck;
+
+	button -e -command ("sbsExportImagesToDisk "+$nodeName) exportImagesToDiskButton;
+	button -e -command ("sbsCreateShadingNet "+$nodeName) createShadingNetButton;
+}
+
+global proc guiLocalTextureAbsoluteChanged(string $attributeName) {
+	show("### guiLocalTextureAbsoluteChanged( " + $attributeName + " )...");
+
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $absoluteAtt = $nodeName + ".textureSizeAbsolute";
+	int $bAbsolute = true;
+	if ($bAbsolute) {
+		int $width = `getAttr ($nodeName + ".textureWidth")`;
+		int $height = `getAttr ($nodeName + ".textureHeight")`;
+		setAttr ($nodeName + ".absoluteTextureWidth") $width;
+		setAttr ($nodeName + ".absoluteTextureHeight") $height;
+	} else {
+		int $width = `getAttr ($nodeName + ".textureWidth")`;
+		int $height = `getAttr ($nodeName + ".textureHeight")`;
+		int $globalWidth = cpp_GetGlobalTextureWidth()-5;
+		int $globalHeight = cpp_GetGlobalTextureHeight()-5;
+		setAttr ($nodeName + ".relativeTextureWidth") ($width-$globalWidth+7);
+		setAttr ($nodeName + ".relativeTextureHeight") ($height-$globalHeight+7);
+	}
+
+	setAttr ($absoluteAtt) $bAbsolute;
+
+	UpdateGUI_TextureSettings_AssetDimensions($attributeName);
+}
+
+global proc guiLocalTextureLockARChanged(string $attributeName) {
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $lockAtt = $nodeName + ".textureLockAspectRatio";
+	int $bLock = `getAttr ($lockAtt)`;
+	$bLock = !$bLock;
+	setAttr ($lockAtt) $bLock;
+	UpdateGUI_TextureSettings_AssetDimensions($attributeName);
+}
+
+global proc CreateGUI_TextureSettings_AssetDimensions(string $attributeName) {
+	show("CreateGUI_TextureSettings_AssetDimensions( " + $attributeName + " )...");
+
+	global int $sbs_Indent;
+	string $nodeName = `match "[^.]*" $attributeName`;
+	string $absoluteWidthAtt = $nodeName + ".absoluteTextureWidth";
+	string $absoluteHeightAtt = $nodeName + ".absoluteTextureHeight";
+	string $widthAtt = $nodeName + ".textureWidth";
+	string $heightAtt = $nodeName + ".textureHeight";
+	string $absoluteAtt = $nodeName + ".textureSizeAbsolute";
+
+	string $kRelativeWidth = getPluginResource("SubstancePlugin", "kAERelativeWidth");
+	string $kRelativeHeight = getPluginResource("SubstancePlugin", "kAERelativeHeight");
+	string $kAbsoluteWidth = getPluginResource("SubstancePlugin", "kAEAbsoluteWidth");
+	string $kAbsoluteHeight = getPluginResource("SubstancePlugin", "kAEAbsoluteHeight");
+	string $kAbsoluteSizes = getPluginResource("SubstancePlugin", "kAEAbsoluteSizes");
+	string $kLockAR = getPluginResource("SubstancePlugin", "kAELockAR");
+	string $kCreateNetwork = getPluginResource("SubstancePlugin", "kAECreateShaderNetwork");
+	string $kCreatePBRNetwork = getPluginResource("SubstancePlugin", "kAECreatePBRShaderNetwork");
+	string $kExportImages = getPluginResource("SubstancePlugin", "kAEExportImages");
+
+	setUITemplate -pst attributeEditorTemplate;
+
+    if(cpp_GetEngine()){
+
+		attrEnumOptionMenuGrp
+			-l $kAbsoluteWidth
+			-at $absoluteWidthAtt
+			-ei 0  "32"
+			-ei 1  "64"
+			-ei 2  "128"
+			-ei 3  "256"
+			-ei 4  "512"
+			-ei 5  "1024"
+			-ei 6  "2048"
+			-ei 7  "4096"
+			attrEnumOptionGroupLocalAbsoluteWidth;
+
+		attrEnumOptionMenuGrp
+			-l $kAbsoluteHeight
+			-at $absoluteHeightAtt
+			-ei 0  "32"
+			-ei 1  "64"
+			-ei 2  "128"
+			-ei 3  "256"
+			-ei 4  "512"
+			-ei 5  "1024"
+			-ei 6  "2048"
+			-ei 7  "4096"
+			attrEnumOptionGroupLocalAbsoluteHeight;
+    }
+    else {
+		attrEnumOptionMenuGrp
+			-l $kAbsoluteWidth
+			-at $absoluteWidthAtt
+			-ei 0  "32"
+			-ei 1  "64"
+			-ei 2  "128"
+			-ei 3  "256"
+			-ei 4  "512"
+			-ei 5  "1024"
+			-ei 6  "2048"
+			-ei 7  "4096"
+			attrEnumOptionGroupLocalAbsoluteWidth;
+
+		attrEnumOptionMenuGrp
+			-l $kAbsoluteHeight
+			-at $absoluteHeightAtt
+			-ei 0  "32"
+			-ei 1  "64"
+			-ei 2  "128"
+			-ei 3  "256"
+			-ei 4  "512"
+			-ei 5  "1024"
+			-ei 6  "2048"
+			-ei 7  "4096"
+			attrEnumOptionGroupLocalAbsoluteHeight;
+    }
+	setParent..;
+
+		checkBoxGrp
+			-numberOfCheckBoxes 1
+			-enable true
+			-label $kLockAR
+			-changeCommand ( "guiLocalTextureLockARChanged(\"" + $nodeName + "\")" )
+			guiLocalTextureLockARCheck;
+	setParent..;
+
+	rowLayout -nc 2 -columnAttach2 "both" "both" -columnWidth2 195 195;
+		button -label $kCreateNetwork -enable true -width 149 -command ("sbsCreateShadingNet "+$nodeName) createShadingNetButton;
+		button -label $kExportImages -enable true -w 149 -command ("sbsExportImagesToDisk "+$nodeName) exportImagesToDiskButton;
+
+	setParent..;
+
+    setUITemplate -ppt;
+
+    UpdateGUI_TextureSettings_AssetDimensions($attributeName);
+}
+
+// ===================================================================================================
+// ENTRY POINT (launched from Maya when selecting a substance node)
+
+global proc AEsubstanceTemplate(string $nodeName) {
+	show("E N T R Y    P O I N T : AEsubstanceTemplate( " + $nodeName + " )...");
+
+	// Preferences handling:
+	ReadSubstancePreferences();
+
+	string $kPanelTexture = getPluginResource("SubstancePlugin", "kAEPanelTexture");
+	string $kPanelParameters = getPluginResource("SubstancePlugin", "kAEPanelParameters");
+	string $kPanelNormal = getPluginResource("SubstancePlugin", "kAEPanelNormal");
+	string $kPanelUV = getPluginResource("SubstancePlugin", "kAEPanelUV");
+	string $kPanelEngine = getPluginResource("SubstancePlugin", "kAEPanelEngine");
+	string $kPanelBaking = getPluginResource("SubstancePlugin", "kAEPanelBaking");
+
+	string $package = `getAttr ($nodeName+".package")`;
+    string $graph	= `getAttr ($nodeName+".graph")`;
+    if ($package!="")
+		updateTweaks($nodeName, $package, $graph);
+
+
+	AEswatchDisplay $nodeName;
+	editorTemplate -beginScrollLayout;
+
+    // -----------------------------------------------------
+	float $mayaVersion = `getApplicationVersionAsFloat` ;
+	editorTemplate -beginLayout $kPanelTexture -collapse 0;
+		editorTemplate -callCustom "CreateGUI_TextureSettings_AssetSelection"
+                                   "UpdateGUI_TextureSettings_AssetSelection"
+                                   "graph";
+
+		editorTemplate -callCustom "CreateGUI_TextureSettings_AssetDimensions"
+                                   "UpdateGUI_TextureSettings_AssetDimensions"
+                                   "textureWidth";
+		if($mayaVersion >= 2016)
+		{
+		    editorTemplate -callCustom "CreateGUI_TextureSettings_Workflow"
+                                       "UpdateGUI_TextureSettings_Workflow"
+                                       "workflow";
+		}
+	editorTemplate -endLayout;
+
+    // -----------------------------------------------------
+	editorTemplate -beginLayout $kPanelParameters -collapse 1;
+		editorTemplate -callCustom "CreateGUI_Inputs"
+                                   "UpdateGUI_Inputs"
+                                   "tweaks";
+	editorTemplate -endLayout;
+
+    // -----------------------------------------------------
+	editorTemplate -beginLayout $kPanelNormal -collapse 1;
+		editorTemplate -callCustom "CreateGUI_EngineNormalFormat"
+                                   "UpdateGUI_EngineNormalFormat"
+                                   "normalFormat";
+	editorTemplate -endLayout;
+
+    // -----------------------------------------------------
+	editorTemplate -beginLayout $kPanelUV -collapse 1;
+		editorTemplate -addControl "uvCoord";   // magic!
+	editorTemplate -endLayout;
+
+    // -----------------------------------------------------
+	editorTemplate -beginLayout $kPanelEngine -collapse 1;
+		editorTemplate -callCustom "CreateGUI_EngineSettings_Type"
+                                   "UpdateGUI_EngineSettings_Type"
+                                   "globalEngine";
+
+		editorTemplate -callCustom "CreateGUI_EngineSettings_Texture"
+                                   "UpdateGUI_EngineSettings_Texture"
+                                   "globalTextureWidth";
+	editorTemplate -endLayout;
+
+    // -----------------------------------------------------
+	editorTemplate -beginLayout $kPanelBaking -collapse 1;
+		editorTemplate -callCustom "CreateGUI_AutoBaking"
+                                   "UpdateGUI_AutoBaking"
+                                   "bakeFormat";
+	editorTemplate -endLayout;
+
+    // -----------------------------------------------------
+	// include/call base class/node attributes
+	AEdependNodeTemplate $nodeName;
+
+    // -----------------------------------------------------
+	editorTemplate -endScrollLayout;
+
+}
+
+global proc sbsTextureSizeChangeResolutionDragCmdExportImages(int $sz, string $sliderName, string $nodeName) {
+	show("### sbsTextureSizeChangeResolutionDragCmdExportImages( " + $sz + ", " + $sliderName + ", " + $nodeName + " )...");
+
+	int $newSize = sbsMakePowerOfTwo($sz);
+	intSliderGrp -e -value $newSize $sliderName;
+	sbsDebugPrint("newSize = "+$newSize);
+
+	sbsAdjustSizeSliderExportImages($sliderName, 1, $nodeName);
+}
+
+global proc sbsTextureSizeChangeResolutionChCmdExportImages(int $sz, string $sliderName, string $nodeName) {
+	show("### sbsTextureSizeChangeResolutionChCmdExportImages( " + $sz + ", " + $sliderName + ", " + $nodeName + " )...");
+	sbsAdjustSizeSliderExportImages($sliderName, 0, $nodeName);
+}
+
+//Description
+//			This adjusts the x resolution and y resolution when the aspect
+//			ratio check box is toggled on
+//
+global proc sbsAdjustSizeSliderExportImages(string  $sliderName, int $makePowerTwoFlag, string $nodeName) {
+	show("### sbsAdjustSizeSliderExportImages( " + $sliderName + ", " + $makePowerTwoFlag + ", " + $nodeName + " )...");
+
+	global float $sbsTextureSizeAspectRatioExportImages;
+
+	int $newVal = 0;
+	int $value = `checkBoxGrp -q -v1 checkBoxGrpTextureSizeAspectRatioExportImages`;
+	if ($value) {
+		if ($sliderName == "intSliderGrpTextureWidthExportImages") {
+			int $valX		= eval("intSliderGrp -q -value intSliderGrpTextureWidthExportImages");
+			int $tempVal	= $valX / $sbsTextureSizeAspectRatioExportImages;
+			$newVal			= $tempVal;
+			if ($makePowerTwoFlag) {
+				$newVal = sbsMakePowerOfTwo($tempVal);
+			}
+			intSliderGrp -e -v $newVal intSliderGrpTextureHeightExportImages;
+		} else {
+			int $valY		= eval("intSliderGrp -q -value intSliderGrpTextureHeightExportImages");
+			int $tempVal	= $valY * $sbsTextureSizeAspectRatioExportImages;
+			$newVal			= $tempVal;
+			if($makePowerTwoFlag) {
+				$newVal = sbsMakePowerOfTwo($tempVal);
+			}
+			intSliderGrp -e -v $newVal intSliderGrpTextureWidthExportImages;
+		}
+	}
+}
+
+//Description
+//			Calcuates the aspect ratio and maintains
+//			it with respect to x and y resolution
+//
+global proc sbsTextureSizeLockAspectRatioCmdExportImages(int $aspect) {
+	global float $sbsTextureSizeAspectRatioExportImages;
+
+	if ($aspect) {
+		float $sizeX = `intSliderGrp -q -value intSliderGrpTextureWidthExportImages`;
+		float $sizeY = `intSliderGrp -q -value intSliderGrpTextureHeightExportImages`;
+
+		$sbsTextureSizeAspectRatioExportImages = $sizeX / $sizeY;
+	}
+}
+
+global proc sbsExportImagesToDisk(string $nodeName) {
+	show("### sbsExportImagesToDisk( " + $nodeName + " )...");
+
+	global int $sbs_Indent;
+	global string	$sbsExportImagesToDiskPath;
+	global int		$sbsCreateShaderNetworkExportImages;
+	global int		$sbsTextureWidthExportImages;
+	global int		$sbsTextureHeightExportImages;
+	global int		$sbsKeepAspectRatioExportImages;
+	global string	$sbsImageFormatExportImages;
+
+	string $kSBSBake = getPluginResource("SubstancePlugin", "kAESBSBake");
+	string $kSubstancePath = getPluginResource("SubstancePlugin", "kAESubstancePath");
+	string $kCreateNetwork = getPluginResource("SubstancePlugin", "kAECreateShaderNetwork");
+	string $kCreatePBRNetwork = getPluginResource("SubstancePlugin", "kAECreatePBRShaderNetwork");
+	string $kSBPath = getPluginResource("SubstancePlugin", "kAESBSPath");
+	string $kSBImageFormat = getPluginResource("SubstancePlugin", "kAESBSImageFormat");
+	string $kSBExport = getPluginResource("SubstancePlugin", "kAEExport");
+	string $kSBClose = getPluginResource("SubstancePlugin", "kAEClose");
+
+
+	if (`window -q -ex sbsBakeToTextureWin`) {
+		deleteUI sbsBakeToTextureWin;
+	}
+	window -wh 375 195 -title $kSBSBake -s 0 sbsBakeToTextureWin;
+	columnLayout -adjustableColumn false $kSBSBake;
+
+    rowLayout -numberOfColumns 3
+			-columnWidth3 40 60 50
+			-columnAttach3 "left" "left" "left"
+			-columnOffset3 10 0 2
+			-adjustableColumn 2;
+
+	text ($kSBPath+":");
+
+	textField -width 305
+			-ann $kSubstancePath
+			-en 1
+			-tx $sbsExportImagesToDiskPath
+			sbsExportPathTFExportImages;
+
+	symbolButton -image "navButtonBrowse.xpm"
+				-command "sbsExportImagesToDisk_fileBrowser"
+				-en 1;
+	setParent..;
+
+	rowLayout	-numberOfColumns 3
+				-columnWidth3 195 120 60
+				-columnAttach3 "both" "both" "both"
+				-columnOffset3	5 20 -25
+				-adjustableColumn 3;
+
+		checkBoxGrp
+		-numberOfCheckBoxes 1
+		-columnWidth 1 $sbs_Indent
+		-label $kCreateNetwork
+		-value1 $sbsCreateShaderNetworkExportImages
+		checkBoxGrpConnectMapsExportImages;
+
+		text ($kSBImageFormat+":");
+	optionMenuGrp sbsFormatOMGExportImages;
+	    menuItem -label "jpg";
+	    menuItem -label "png";
+	    menuItem -label "tif";
+	    menuItem -label "tga";
+    setParent..;
+
+	//Select current image format
+    optionMenuGrp -e -v $sbsImageFormatExportImages  sbsFormatOMGExportImages;
+
+    int $maxExportTextureSize = 4096;
+
+    // ...
+    string $label = getPluginResource("SubstancePlugin", "kAEMapWidth");
+    intSliderGrp
+		-columnWidth 1 100
+        -label $label
+		-field true
+		-minValue 128 -maxValue $maxExportTextureSize
+		-fieldMinValue 128 -fieldMaxValue $maxExportTextureSize
+		-dragCommand ("sbsTextureSizeChangeResolutionDragCmdExportImages #1 intSliderGrpTextureWidthExportImages "+$nodeName)
+		-changeCommand ("sbsTextureSizeChangeResolutionChCmdExportImages #1 intSliderGrpTextureWidthExportImages "+$nodeName)
+		-value $sbsTextureWidthExportImages
+		intSliderGrpTextureWidthExportImages;
+
+    $label = getPluginResource("SubstancePlugin", "kAEMapHeight");
+	intSliderGrp
+		-columnWidth 1 100
+        -label $label
+		-field true
+		-minValue 128 -maxValue $maxExportTextureSize
+		-fieldMinValue 128 -fieldMaxValue $maxExportTextureSize
+		-dragCommand ("sbsTextureSizeChangeResolutionDragCmdExportImages #1 intSliderGrpTextureHeightExportImages "+$nodeName)
+		-changeCommand ("sbsTextureSizeChangeResolutionChCmdExportImages #1 intSliderGrpTextureHeightExportImages "+$nodeName)
+		-value $sbsTextureHeightExportImages
+		intSliderGrpTextureHeightExportImages;
+
+    $label = getPluginResource("SubstancePlugin", "kAEKeepAspectRatio");
+	checkBoxGrp
+		-numberOfCheckBoxes 1
+		-columnWidth 1 $sbs_Indent
+		-enable true
+        -label $label
+		-value1 $sbsKeepAspectRatioExportImages
+		checkBoxGrpTextureSizeAspectRatioExportImages;
+
+    // ...
+    rowLayout -numberOfColumns 2
+			-columnWidth2 80 80
+			-columnAttach2 "left" "left"
+			-columnOffset2 0 0
+			-adjustableColumn 2;
+
+	button -w 185 -l $kSBExport -c ("sbsPerformSbsBakeToTexture "+$nodeName);
+	button -w 185 -l $kSBClose -c ("sbsCloseBakeWindow "+$nodeName);
+
+	showWindow sbsBakeToTextureWin;
+}
+
+global proc sbsCloseBakeWindow(string $nodeName) {
+	show("### sbsCloseBakeWindow( " + $nodeName + " )...");
+
+	global string	$sbsExportImagesToDiskPath;
+	global int	$sbsCreateShaderNetworkExportImages;
+	global int	$sbsTextureWidthExportImages;
+	global int	$sbsTextureHeightExportImages;
+	global int	$sbsKeepAspectRatioExportImages;
+	global string	$sbsImageFormatExportImages;
+
+	//update our global variables
+	$sbsExportImagesToDiskPath		= `textField -q -tx sbsExportPathTFExportImages`;
+	$sbsImageFormatExportImages		= `optionMenuGrp -q -v sbsFormatOMGExportImages`;
+	$sbsKeepAspectRatioExportImages		= `checkBoxGrp -q -v1 checkBoxGrpTextureSizeAspectRatioExportImages`;
+	$sbsTextureWidthExportImages		= eval("intSliderGrp -q -value intSliderGrpTextureWidthExportImages");
+	$sbsTextureHeightExportImages		= eval("intSliderGrp -q -value intSliderGrpTextureHeightExportImages");
+	$sbsCreateShaderNetworkExportImages	= `checkBoxGrp -q -v1 checkBoxGrpConnectMapsExportImages`;
+
+	deleteUI sbsBakeToTextureWin;
+}
+
+global proc sbsExportImagesToDisk_fileBrowser() {
+	show("### sbsExportImagesToDisk_fileBrowser()...");
+
+	global string $sbsExportImagesToDiskPath;
+	string $kSBSBakePath = getPluginResource("SubstancePlugin", "kAESBSBakePath");
+	string $kSelect = getPluginResource("SubstancePlugin", "kAESelect");
+    // this will select a directory:
+
+    string $workspace = `workspace -fn`;
+    string $startDir = `setWorkingDirectory $workspace "Folder" "Select"`;
+    if (size($sbsExportImagesToDiskPath)) {
+		$startDir = $sbsExportImagesToDiskPath ;
+	}
+
+    string $userChoice[] = `fileDialog2 -fileMode 3 -startingDirectory $startDir -caption $kSBSBakePath -okCaption $kSelect `;
+
+    if( size($userChoice) > 0 && $userChoice[0] != "" ) {
+		string $path = fromNativePath($userChoice[0]);
+
+		textField -e -tx $path sbsExportPathTFExportImages;
+
+		//Update our global variable
+		$sbsExportImagesToDiskPath = $path;
+    }
+}
+
+global proc connectFileTextureNodeToMaterial(string $node, string $material, string $channel) {
+
+	show("### connectFileTextureNodeToMaterial( " + $node + ", " + $material + ", " + $channel + " )...");
+
+    int $PBRWorkflow = `getAttr($node+".workflow")`;
+    //$node may be a substance output node or a fileTexture or anything else...
+    if ($material == "") {
+	    //Create/Get material and shading group
+	    string $material = sbs_GetMaterialFromSubstanceNodeOrCreateIt($node, $PBRWorkflow);
+	    if (!size($material)) { return; }
+    }
+
+    string $shadingGroup = sbs_GetShadingGroupFromMaterial($material);
+
+    if ($channel == "opacity" && ( `attributeQuery -exists -node $material "transparency"` == true) ) {
+	    string $reverse = `shadingNode -asUtility reverse`;
+	    conn("04: connectAttr -f " + $node + ".outColor " + $reverse + ".input");
+	    connectAttr -f ($node + ".outColor") ($reverse + ".input");
+	    conn("05: connectAttr -f " + $reverse + ".output " + $material + ".transparency");
+	    connectAttr -f ($reverse + ".output") ($material + ".transparency");
+    } else if ($channel == "diffuse" && ( `attributeQuery -exists -node $material "color"` == true) ) {
+	    conn("06: connectAttr -f " + $node  + ".outColor " + $material + ".color");
+	    connectAttr -f ($node  + ".outColor") ($material + ".color");
+    } else if ($channel == "emissive" && ( `attributeQuery -exists -node $material "incandescence"` == true) ) {
+	    conn("07: connectAttr -f " + $node  + ".outColor " + $material + ".incandescence");
+	    connectAttr -f ($node  + ".outColor") ($material + ".incandescence");
+    } else if ($channel == "specular" && ( `attributeQuery -exists -node $material "specularColor"` == true) ) {
+	    conn("08: connectAttr -f " + $node + ".outColor " + $material + ".specularColor");
+	    connectAttr -f ($node + ".outColor") ($material + ".specularColor");
+    } else if ($channel == "normal" && ( `attributeQuery -exists -node $material "normalCamera"` == true) ) {
+	    string $bump2d = `shadingNode -asUtility bump2d`;
+	    conn("09: connectAttr -f " + $node + ".outAlpha " + $bump2d + ".bumpValue");
+	    connectAttr -f ($node + ".outAlpha") ($bump2d + ".bumpValue");
+	    conn("10: connectAttr -f " + $bump2d + ".outNormal " + $material + ".normalCamera");
+	    connectAttr -f ($bump2d + ".outNormal") ($material + ".normalCamera");
+	    select -r $bump2d;
+	    setAttr ($bump2d + ".bumpInterp") 1;
+	    rename $bump2d ($node + "_bump2d");
+    } else if ($channel == "bump" && ( `attributeQuery -exists -node $material "normalCamera"` == true) ) {
+	    string $bump2d = `shadingNode -asUtility bump2d`;
+	    conn("11: connectAttr -f " + $node + ".outColorR " + $bump2d + ".bumpValue");
+	    connectAttr -f ($node + ".outColorR") ($bump2d + ".bumpValue");
+	    string $connectedNodes[] = `listConnections ($material + ".normalCamera")`;
+	    if (!size($connectedNodes)) {
+	        //connect if not already something
+	        conn("12: connectAttr -f " + $bump2d + ".outNormal " + $material + ".normalCamera");
+	        connectAttr -f ($bump2d + ".outNormal") ($material + ".normalCamera");
+	    }
+	    select -r $bump2d;
+	    rename $bump2d ($node + "_bump2d");
+    } else if ($channel == "glossiness" && ( `attributeQuery -exists -node $material "roughness"` == true) ) {
+        conn("13: connectAttr -f " + $node + ".outColorR " + $material + ".roughness");
+        connectAttr -f ($node + ".outColorR") ($material + ".roughness");
+    } else if ($channel == "gloss" && ( `attributeQuery -exists -node $material "roughness"` == true) ) {
+	    conn("14: connectAttr -f " + $node + ".outColorR " + $material + ".roughness");
+	    connectAttr -f ($node + ".outColorR") ($material + ".roughness");
+    } else if ( ($channel == "height") && $shadingGroup != "")	{
+	    string $dispShader = `shadingNode -asShader displacementShader`;
+
+	    select -r $dispShader;
+	    $dispShader = `rename $dispShader ($node + "_heightMap")`;
+
+	    conn("15: connectAttr -f " + $node + ".outColorR " + $dispShader + ".displacement");
+	    connectAttr -f ($node + ".outColorR") ($dispShader + ".displacement");
+
+	    string $attr = ($dispShader + ".displacement");
+	    conn("16: connectAttr -f " + $attr + " " + $shadingGroup + ".displacementShader");
+	    connectAttr -f $attr ($shadingGroup + ".displacementShader");
+    } else if ( ($channel == "Displacement") && $shadingGroup != "") {
+	    string $dispShader = `shadingNode -asShader displacementShader`;
+	    select -r $dispShader;
+	    $dispShader = `rename $dispShader ($node + "_DisplacementMap")`;
+
+	    conn("17: connectAttr -f " + $node + ".outColorR " + $dispShader + ".displacement");
+	    connectAttr -f ($node + ".outColorR") ($dispShader + ".displacement");
+
+	    string $connectedDispShaders[] = `listConnections ($shadingGroup + ".displacementShader")`;
+	    if (!size($connectedDispShaders)) {
+	        //Connect it
+	        string $attr = ($dispShader + ".displacement");
+	        conn("18: connectAttr -f " + $attr + " " + $shadingGroup + ".displacementShader");
+	        connectAttr -f $attr ($shadingGroup + ".displacementShader");
+	    }
+    }
+}
+
+global proc sbsPerformSbsBakeToTexture(string $nodeName) {
+	show("### sbsPerformSbsBakeToTexture( " + $nodeName + " )...");
+
+	global string	$sbsExportImagesToDiskPath;
+	global int		$sbsCreateShaderNetworkExportImages;
+	global int		$sbsTextureWidthExportImages;
+	global int		$sbsTextureHeightExportImages;
+	global int		$sbsKeepAspectRatioExportImages;
+	global string	$sbsImageFormatExportImages;
+	string $sbsBakingIntoPathMessageA = getPluginResource("SubstancePlugin", "kAESBSBakingIntoPathA");
+	string $sbsBakingIntoPathMessageB = getPluginResource("SubstancePlugin", "kAESBSBakingIntoPathB");
+	string $sbsBakingIntoPathMessageC = getPluginResource("SubstancePlugin", "kAESBSBakingIntoPathC");
+
+	//update our global variables
+	$sbsExportImagesToDiskPath			= `textField -q -tx sbsExportPathTFExportImages`;
+	$sbsImageFormatExportImages			= `optionMenuGrp -q -v sbsFormatOMGExportImages`;
+	$sbsKeepAspectRatioExportImages		= `checkBoxGrp -q -v1 checkBoxGrpTextureSizeAspectRatioExportImages`;
+	$sbsTextureWidthExportImages		= eval("intSliderGrp -q -value intSliderGrpTextureWidthExportImages");
+	$sbsTextureHeightExportImages		= eval("intSliderGrp -q -value intSliderGrpTextureHeightExportImages");
+	$sbsCreateShaderNetworkExportImages	= `checkBoxGrp -q -v1 checkBoxGrpConnectMapsExportImages`;
+
+	if ($sbsExportImagesToDiskPath == "") {	return;	}
+
+	//Update both texturesize attributes
+	int $bAbsolute;
+	int $bAbsoluteWidth;
+	int $bAbsoluteHeight;
+	if ($nodeName != "") {
+		//Update attributes
+		int $pow2Width	= sbsGetPowerOfTwo($sbsTextureWidthExportImages)-5;
+		int $pow2Height = sbsGetPowerOfTwo($sbsTextureHeightExportImages)-5;
+
+		string $absoluteAtt = $nodeName + ".textureSizeAbsolute";
+		$bAbsolute = `getAttr ($absoluteAtt)`;
+		if (!$bAbsolute) {
+			guiLocalTextureAbsoluteChanged($absoluteAtt);
+		}
+
+		$bAbsoluteWidth = getAttr ($nodeName+".absoluteTextureWidth");
+		$bAbsoluteHeight = getAttr ($nodeName+".absoluteTextureHeight");
+
+		setAttr ($nodeName+".absoluteTextureWidth")  $pow2Width;
+		setAttr ($nodeName+".absoluteTextureHeight") $pow2Height;
+	}
+
+	//The substance output node will bake its texture and create the file texture node
+	string $connectedOutputNodesTemp[] = `listConnections -type "substanceOutput" $nodeName`;
+	string $connectedOutputNodes[] = `stringArrayRemoveDuplicates($connectedOutputNodesTemp)`; //remove duplicates
+	if (!size($connectedOutputNodes)) {
+		string $kSBSBakeFailed = getPluginResource("SubstancePlugin", "kAESBSBakeFailed");
+		string $kOk = getPluginResource("SubstancePlugin", "kAEOk");
+
+		confirmDialog
+				-message $kSBSBakeFailed
+				-button $kOk
+				-defaultButton $kOk;
+
+		select -r $nodeName;
+		return;
+	}
+
+	//Update all outputs bitmap format
+	string $outputNode = "";
+	for ($outputNode in $connectedOutputNodes) {
+		string $cmd = "setAttr "+$outputNode+".imageFormat -type \"string\" \""+$sbsImageFormatExportImages+"\"";
+		eval($cmd);
+
+		//set the path in the attribute, this launches the exportdisk function
+		$cmd = "setAttr "+$outputNode+".imagesExportPath -type \"string\" \""+$sbsExportImagesToDiskPath+"\"";
+		eval($cmd);
+
+		//connect place2D
+		{
+			string $fileTextureNodeCreated = `getAttr ($outputNode+".fileNodeName")`;
+			string $place2DTextureNode[]	= `listConnections ($outputNode+".uv")`;
+			string $oldPlace2DTextureNode[] = `listConnections ($fileTextureNodeCreated+".uv")`;
+
+			//delete the auto place2d
+			if (size($oldPlace2DTextureNode)) {
+				delete $oldPlace2DTextureNode[0];
+			}
+
+			//connect the substance one
+			if (size($place2DTextureNode)) {
+				conn("19: connectAttr " + $place2DTextureNode[0] + ".outUV " + $fileTextureNodeCreated + ".uv");
+				connectAttr ($place2DTextureNode[0]+".outUV") ($fileTextureNodeCreated+".uv");
+				conn("20: connectAttr " + $place2DTextureNode[0] + ".outUvFilterSize " + $fileTextureNodeCreated + ".uvFilterSize");
+				connectAttr ($place2DTextureNode[0]+".outUvFilterSize") ($fileTextureNodeCreated+".uvFilterSize");
+			}
+		}
+	}
+
+	//Restore both texturesize attributes
+	if ($nodeName != "") {
+		setAttr ($nodeName+".absoluteTextureWidth")  $bAbsoluteWidth;
+		setAttr ($nodeName+".absoluteTextureHeight") $bAbsoluteHeight;
+
+		if (!$bAbsolute) {
+			string $absoluteAtt = $nodeName + ".textureSizeAbsolute";
+			guiLocalTextureAbsoluteChanged($absoluteAtt);
+		}
+	}
+
+	if ($sbsCreateShaderNetworkExportImages) {
+		//Get material from node, or create it
+		string $materialName = ($nodeName + "_MaterialBaked");
+		string $materialNodeName[]	= `ls $materialName`;
+		if (!size($materialNodeName)) {
+			//Doesn't exist yet so create material and shading group
+			string $material		= `shadingNode -asShader phongE`;
+			string $shadingGroup	= `sets -renderable true -noSurfaceShader true -empty -name phongE2SG`;
+			// connect material2shadingG //
+			conn("21: connectAttr -f " + $material + ".outColor " + $shadingGroup + ".surfaceShader");
+			connectAttr -f ($material + ".outColor") ($shadingGroup + ".surfaceShader");
+
+			select -r $material;
+			$materialName = `rename $material $materialName`;
+		}
+
+		for ($outputNode in $connectedOutputNodes) {
+			// Get name of the file texture node, then the channel name
+			string $fileTextureNodeCreated = `getAttr ($outputNode+".fileNodeName")`;
+			string $channelName = `getAttr ($outputNode+".channelName")`;
+			if ($fileTextureNodeCreated != "") {
+				connectFileTextureNodeToMaterial($fileTextureNodeCreated, $materialName, $channelName);
+			}
+		}
+	}
+	sbs_RearrangeHypershadeGraph();
+	select -r $nodeName;
+	print($sbsBakingIntoPathMessageA+$nodeName+$sbsBakingIntoPathMessageB+$sbsExportImagesToDiskPath+$sbsBakingIntoPathMessageC+$sbsTextureWidthExportImages+" x "+$sbsTextureHeightExportImages+"\n");
+}
+
+global proc sbsCreateShadingNet(string $nodeName) {
+    milestone("C r e a t e    s h a d e r    n e t w o r k . . .");
+    show("sbsCreateShadingNet( " + $nodeName + " )...");
+
+    python("from SubstanceHelpers import sbsCreateShadingNet");
+    python("sbsCreateShadingNet(\""+$nodeName+"\")");
+}
+
+global proc sbsCreateShadingNetPBR(string $nodeName) {
+    show("### sbsCreateShadingNetPBR( " + $nodeName + " )...");
+    python("from SubstanceHelpers import sbsCreateShadingNetPBR");
+    python("sbsCreateShadingNetPBR(\""+$nodeName+"\")");
+}
+
+global proc int sbsAreAlreadyConnected(string $nodeWithAttributeName, string $otherNode) {
+    python("from SubstanceHelpers import sbsAreAlreadyConnected");
+    int $res = python("sbsAreAlreadyConnected(\""+$nodeWithAttributeName+"\", \"" + $otherNode + "\")");
+
+    return $res;
+}
+
+global proc int sbsConnectShadingNetwork(string $substanceTextureNode, string $substanceOutputNode, string $channelName) {
+	show("sbsConnectShadingNetwork( " + $substanceTextureNode + ", " + $substanceOutputNode + ", " + $channelName + " )...");
+
+	string $prefix = "outputdyn_";
+	string $postfixChannelName = "_Name";
+	string $postfixChannelColor = "_Color";
+	string $postfixChannelAlpha = "_Alpha";
+	string $postfixChannelUVCoords = "_uvCoord";
+
+	if (!`objExists $substanceOutputNode` || !`attributeQuery -exists -node $substanceOutputNode "uv"`)
+		return 0;
+
+	//Connect color and alpha attributes
+	if ( `attributeQuery -exists -node $substanceTextureNode ($prefix+$channelName+$postfixChannelColor)` == true) {
+		string $attr = ($substanceTextureNode+"."+$prefix+$channelName+$postfixChannelColor);
+
+		if (`attributeQuery -exists -node $substanceTextureNode ($prefix+$channelName+$postfixChannelColor)` == true) {
+			int $alreadyConnected = sbsAreAlreadyConnected($attr, $substanceOutputNode);
+			if (!$alreadyConnected && (`attributeQuery -exists -node $substanceOutputNode "inColor"` == true)) {
+				conn("22: connectAttr -f " + $attr + " " + $substanceOutputNode + ".inColor");
+				connectAttr -f $attr ($substanceOutputNode+".inColor");
+			}
+		}
+	}
+
+	if ( `attributeQuery -exists -node $substanceTextureNode ($prefix+$channelName+$postfixChannelAlpha)` == true) {
+		$attr = $substanceTextureNode+"."+$prefix+$channelName+$postfixChannelAlpha;
+		int $alreadyConnected = sbsAreAlreadyConnected($attr, $substanceOutputNode);
+		if (!$alreadyConnected && (`attributeQuery -exists -node $substanceOutputNode "inAlpha"` == true)) {
+			conn("23: connectAttr -f " + $attr + " " + $substanceOutputNode + ".inAlpha");
+			connectAttr -f $attr ($substanceOutputNode+".inAlpha");
+		}
+	}
+
+	//Connect UVs
+
+	// connect place2DTexture to substance output node//
+	//Get place2DTextureNode
+	string $place2DTextureNode[]	= `listConnections ($substanceTextureNode+".uv")`;
+	string $oldPlace2DTextureNode[] = `listConnections ($substanceOutputNode+".uv")`;
+
+	if (size($oldPlace2DTextureNode)) {
+		//Disconnect old place2Dtexture node
+		if (size($place2DTextureNode)) {
+			if ($place2DTextureNode[0] != $oldPlace2DTextureNode[0]) {
+				disconnectAttr ($oldPlace2DTextureNode[0]+".outUV") ($substanceOutputNode+".uvCoord");
+				disconnectAttr ($oldPlace2DTextureNode[0]+".outUvFilterSize") ($substanceOutputNode+".uvFilterSize");
+			}
+		}
+	}
+
+	if ( size($place2DTextureNode)) {
+		sbsDebugPrint("connecting outUV of "+$place2DTextureNode[0]);
+
+		if (size($oldPlace2DTextureNode)) {
+			//Check that they are not already connected
+			if ($oldPlace2DTextureNode[0] != $place2DTextureNode[0]) {
+				//Connect it to the substance output node
+				conn("24: connectAttr " + $place2DTextureNode[0] + ".outUV " + $substanceOutputNode+".uv");
+				connectAttr ($place2DTextureNode[0]+".outUV") ($substanceOutputNode+".uv");
+				conn("25: connectAttr " + $place2DTextureNode[0] + ".outUvFilterSize " + $substanceOutputNode + ".uvFilterSize");
+				connectAttr ($place2DTextureNode[0]+".outUvFilterSize") ($substanceOutputNode+".uvFilterSize");
+			}
+		} else {
+			//Connect it to the substance output node
+			conn("26: connectAttr " + $place2DTextureNode[0] + ".outUV " + $substanceOutputNode + ".uv");
+			connectAttr ($place2DTextureNode[0]+".outUV") ($substanceOutputNode+".uv");
+			conn("27: connectAttr " + $place2DTextureNode[0] + ".outUvFilterSize " + $substanceOutputNode+".uvFilterSize");
+			connectAttr ($place2DTextureNode[0]+".outUvFilterSize") ($substanceOutputNode+".uvFilterSize");
+		}
+	}
+
+	if (size($oldPlace2DTextureNode)) {
+		//Delete old place2Dtexture node
+		if (size($place2DTextureNode)) {
+			if ($place2DTextureNode[0] != $oldPlace2DTextureNode[0]) {
+				delete $oldPlace2DTextureNode[0]; //delete it
+			}
+		}
+	}
+
+	//Connect channel name
+	if ( `attributeQuery -exists -node $substanceTextureNode ($prefix+$channelName+$postfixChannelName)` == true) {
+		$attr = ($substanceTextureNode+"."+$prefix+$channelName+$postfixChannelName);
+		int $alreadyConnected = sbsAreAlreadyConnected($attr, $substanceOutputNode);
+		if (!$alreadyConnected && (`attributeQuery -exists -node $substanceOutputNode "channelName"` == true)) {
+			conn("28: connectAttr -f " + $attr + " " + $substanceOutputNode + ".channelName");
+			connectAttr -f $attr ($substanceOutputNode+".channelName");
+		}
+	}
+	return 1;
+}
+
+global proc reconnectShadingNetwork(string $nodeName, string $channelsNames[]) {
+	show("reconnectShadingNetwork( " + $nodeName + ", ... )...");
+
+	//Connect all channels attributes if the node already exist
+	string $curChannel = "";
+	string $material = "";
+	for ($curChannel in $channelsNames) {
+		string $outputNodeName	= $curChannel+"_"+$nodeName;
+
+		if (sbsConnectShadingNetwork($nodeName, $outputNodeName, $curChannel))
+		{
+			//Fill our material node if not yet done
+			if ($material == "") {
+				string $connectedNodes[] = `listConnections $outputNodeName`;
+				if (size($connectedNodes)) {
+					string $matNode = "";
+					for ($matNode in $connectedNodes) {
+						if (sbs_IsMaterialNode($matNode)) {
+							$material = $matNode; //Found
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if ($material != "") {
+		//Check if there is an unused bump node.
+		if ( `attributeQuery -exists -node $material "normalCamera"` == true) {
+			string $source = `connectionInfo -sourceFromDestination ($material+".normalCamera")`;
+			if ($source != "") {
+				string $bump2dNodes[] = `listConnections ($material+".normalCamera")`;
+				for ($bump in $bump2dNodes) {
+					string $connections[] = `listConnections ($bump+".bumpValue")`;
+					if (size($connections)==0)
+						delete $bump;
+				}
+			}
+		}
+	}
+}

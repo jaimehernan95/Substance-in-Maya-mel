@@ -1,0 +1,65 @@
+
+global proc OpenMyScene() {
+
+    string $defaultDir = `workspace -q -fullName` + "/scenes";
+
+    string $result[] = `fileDialog2 -caption "Select a Scene..."
+                                    -fm 1
+                                    -fileFilter "Maya Scenes(*.mb);;"
+                                    -selectFileFilter "Maya Scenes(*.mb)"
+                                    -dialogStyle 2
+                                    -startingDirectory $defaultDir`;
+    if (!size($result))
+	return; //user cancelled
+
+    file -f -options "v=0;"  -ignoreVersion  -typ "mayaBinary" -o $result[0];addRecentFile($result[0], "mayaBinary");
+
+    HypershadeWindow;
+}
+
+global proc Info() {
+
+    print("win64 ? -> " + `about -win64` + "\n");
+    print("windows ? -> " + `about -windows` + "\n");
+    print("linux ? -> " + `about -linux` + "\n");
+    print("linux64 ? -> " + `about -linux64` + "\n");
+    print("macOS ? -> " + `about -macOS` + "\n");
+    print("macOSppc ? -> " + `about -macOSppc` + "\n");
+    print("macOSx86 ? -> " + `about -macOSx86` + "\n");
+
+    print("\n");
+    print("liveUpdate ? -> \n" + `about -liveUpdate` + "\n");
+
+    string $env= getenv("MAYA_LOCATION");
+    print("MAYA_LOCATION = " + $env + "\n");
+
+    $env= getenv("MAYA_APP_DIR");
+    print("MAYA_APP_DIR = " + $env + "\n");
+
+    string $scriptDir = (`internalVar -userScriptDir`);
+    print("$scriptDir = " + $scriptDir + "\n");
+
+
+}
+
+global int $substancePreferencesFlag = 0;	// Have we read the Substance Preferences yet?
+
+global proc SubstancePreferences() {
+
+    print("SubstancePreferences()...\n");
+    Preferences();
+}
+
+global string $gMainWindow;
+setParent $gMainWindow;
+
+menu -label "Substance" -parent $gMainWindow -tearOff on;
+menuItem -ann "Substance Preferences Setting" -label "Preferences" -echoCommand true -command ( "SubstancePreferences()" ) ;
+// The following options are used for development purposes only...
+//menuItem -ann "Environment Info..." -label "Info" -echoCommand true -command ( "Info()" ) ;
+//menuItem -ann "Scene Selection" -label "Open My Scene" -echoCommand true -command ( "OpenMyScene()" ) ;
+
+
+
+
+
